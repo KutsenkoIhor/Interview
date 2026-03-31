@@ -2,11 +2,12 @@
 
 ## Зміст
 
-1. [Життєвий цикл HTTP-запиту](#1-життєвий-цикл-http-запиту)
+1. [Життєвий цикл HTTP-запиту, DNS](#1-життєвий-цикл-http-запиту-DNS)
+2. [Nginx vs Apache, Headers](#2-nginx-vs-apache-headers)
 
 ---
 
-### 1. Життєвий цикл HTTP-запиту
+### 1. Життєвий цикл HTTP-запиту, DNS
 
 <details>
 <summary>Розкрити:</summary>
@@ -177,5 +178,198 @@ DNS → TCP/TLS → HTTP request → web server → PHP-FPM → app → DB/cache
 - локальна підміна домену на IP
 - має пріоритет над DNS
 - працює тільки на цій машині
+
+</details>
+
+---
+
+### 2. Nginx vs Apache, Headers
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Nginx vs Apache
+
+На співбесіді можна сказати так:
+
+"Apache і Nginx — це веб-сервери, але вони по-різному обробляють запити.
+
+Apache історично працює через process-based або thread-based модель: на запити виділяються окремі процеси або потоки. Він дуже гнучкий, добре підтримує .htaccess, але під великим навантаженням може споживати більше ресурсів.
+
+Nginx побудований на event-driven, asynchronous architecture. Він краще працює з великою кількістю одночасних з'єднань, споживає менше пам'яті, часто використовується як reverse proxy, load balancer і для віддачі статики.
+
+У PHP-проєктах Nginx часто працює разом із PHP-FPM, а Apache може або також працювати з PHP-FPM, або через mod_php, хоча зараз частіше теж через PHP-FPM."
+
+Дуже коротка різниця:
+
+**Apache**
+- гнучкий
+- є .htaccess
+- простіше для старих проєктів
+- може бути важчим під high load
+
+**Nginx**
+- швидкий на статиці
+- добре тримає багато конекшенів
+- часто використовується як reverse proxy
+- не читає .htaccess
+
+Коли що краще:
+
+"Якщо говорити про modern production setup, то найчастіше я очікую Nginx + PHP-FPM. Особливо якщо є high load, reverse proxy, caching, SSL termination, балансування.
+
+Apache я частіше бачу в legacy-проєктах або там, де важлива гнучка per-directory конфігурація через .htaccess."
+
+Сильна відповідь для senior:
+
+"Головна різниця не тільки в тому, що один швидший, а інший повільніший. Важливіша різниця — в архітектурі обробки запитів. Nginx краще масштабується на велику кількість одночасних підключень і часто стоїть на фронті як reverse proxy. Apache більш гнучкий на рівні конфігурації директорій і історично був дуже популярний в PHP-екосистемі."
+
+---
+
+#### Що таке headers
+
+"HTTP headers — це службова інформація, яка передається разом із HTTP-запитом або HTTP-відповіддю. Вони містять метадані: тип контенту, авторизацію, cookies, cache rules, user-agent, host та інше."
+
+Приклади request headers:
+- `Host`
+- `Authorization`
+- `Content-Type`
+- `Accept`
+- `User-Agent`
+- `Cookie`
+- `X-Request-Id`
+- `X-Forwarded-For`
+
+Приклади response headers:
+- `Content-Type`
+- `Cache-Control`
+- `Set-Cookie`
+- `Location`
+- `X-Frame-Options`
+- `Strict-Transport-Security`
+
+---
+
+#### Як витягнути headers у PHP
+
+**Варіант 1. Через `$_SERVER`**
+
+```php
+$host = $_SERVER['HTTP_HOST'] ?? null;
+$userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+$authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+$contentType = $_SERVER['CONTENT_TYPE'] ?? null;
+```
+
+Більшість request headers у `$_SERVER` приходять у вигляді:
+- з префіксом `HTTP_`
+- у верхньому регістрі
+- дефіси замінені на `_`
+
+Наприклад:
+```
+X-Request-Id   → HTTP_X_REQUEST_ID
+User-Agent     → HTTP_USER_AGENT
+Content-Type   → CONTENT_TYPE  (без HTTP_)
+```
+
+**Варіант 2. Через `getallheaders()`**
+
+```php
+$headers = getallheaders();
+$auth = $headers['Authorization'] ?? null;
+```
+
+"getallheaders() зручна, але я б не покладався тільки на неї у portable-рішенні, бо в різних оточеннях її поведінка може відрізнятись. Найнадійніше — або framework request object, або нормалізація через $_SERVER."
+
+**Варіант 3. Через framework**
+
+Symfony:
+```php
+$request->headers->get('Authorization');
+$request->headers->get('X-Request-Id');
+```
+
+Yii2:
+```php
+$headers = Yii::$app->request->headers;
+$auth = $headers->get('Authorization');
+$requestId = $headers->get('X-Request-Id');
+```
+
+"У чистому PHP можна брати із `$_SERVER` або `getallheaders()`, але в реальному проєкті я зазвичай використовую request abstraction фреймворка, бо це читабельніше і менше шансів помилитися."
+
+---
+
+#### Як віддати response headers у PHP
+
+```php
+header('Content-Type: application/json');
+header('X-Request-Id: 123');
+http_response_code(200);
+
+echo json_encode(['ok' => true]);
+```
+
+У framework це теж зазвичай робиться через response object.
+
+---
+
+#### Які headers часто питають на співбесіді
+
+**Authorization** — для токенів:
+```
+Authorization: Bearer <token>
+```
+
+**Content-Type** — формат body:
+```
+application/json
+application/x-www-form-urlencoded
+multipart/form-data
+```
+
+**Accept** — що клієнт хоче отримати у відповіді.
+
+**Host** — який домен запитували.
+
+**X-Forwarded-For** — оригінальний IP клієнта, якщо запит іде через proxy або load balancer.
+
+**X-Forwarded-Proto** — показує, чи був оригінальний запит `http` або `https`.
+
+---
+
+#### Важливий senior-момент про proxy
+
+"У продакшені треба пам'ятати, що додаток часто стоїть за Nginx, load balancer або Cloudflare, тому клієнтський IP не завжди буде в `REMOTE_ADDR`. Часто треба дивитися `X-Forwarded-For`, але тільки якщо ми довіряємо proxy. Інакше це можна підробити."
+
+---
+
+#### Готова відповідь одним шматком
+
+"Apache і Nginx — це веб-сервери, але вони відрізняються архітектурою. Apache історично використовує process/thread-based підхід і підтримує .htaccess, що зручно для legacy або гнучкої конфігурації. Nginx побудований на event-driven моделі, тому краще працює з великою кількістю одночасних з'єднань, добре віддає статику і часто використовується як reverse proxy перед PHP-FPM. У сучасних PHP-проєктах частіше використовується Nginx + PHP-FPM.
+
+HTTP headers — це метадані запиту або відповіді. Наприклад, Authorization, Content-Type, Accept, Host, Cookie. У PHP їх можна витягувати через `$_SERVER`, наприклад `HTTP_AUTHORIZATION`, або через `getallheaders()`. У фреймворках краще використовувати request object, наприклад `$request->headers->get('Authorization')`. Для response headers можна використовувати `header()` або response object фреймворка."
+
+---
+
+#### Коротка шпаргалка
+
+**Nginx vs Apache**
+- Apache = process/thread based, .htaccess, legacy-friendly
+- Nginx = event-driven, high concurrency, reverse proxy, static files
+
+**Headers**
+- це службові метадані HTTP
+- бувають request і response headers
+
+**Як читати в PHP**
+- `$_SERVER['HTTP_AUTHORIZATION']`
+- `getallheaders()`
+- framework request object
+
+**Важливо**
+- за proxy справжній IP часто не в `REMOTE_ADDR`
+- треба дивитися `X-Forwarded-For` обережно
 
 </details>
