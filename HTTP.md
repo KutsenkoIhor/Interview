@@ -7,6 +7,9 @@
 3. [Протоколи передачі даних: UDP, TCP, HTTP, HTTPS (HTTP/1 vs HTTP/2)](#3-протоколи-передачі-даних-udp-tcp-http-https-HTTP1-vs-HTTP2)
 4. [Від чого захищає HTTPS/TLS, як працює TLS handshake, чи можна перехопити HTTPS](#4-від-чого-захищає-httpstls-як-працює-tls-handshake-чи-можна-перехопити-https)
 5. [XSS, SQL Injection, CSRF, Broken Authentication](#5-xss-sql-injection-csrf-broken-authentication)
+6. [Що таке REST? Чи може REST повертати XML?](#6-що-таке-rest-чи-може-rest-повертати-xml)
+7. [CORS](#7-cors)
+8. [Cookies, Headers, HttpOnly, Session](#8-cookies-headers-httponly-session)
 
 ---
 
@@ -769,5 +772,424 @@ Broken Authentication — це клас проблем, пов'язаних із
 **CSRF** — браузер жертви відправляє небажаний запит → захист: CSRF token, SameSite, Origin check
 
 **Broken Auth** — проблеми логіну, токенів, сесій → захист: hash passwords, MFA, rate limit, session security
+
+</details>
+---
+
+### 6. Що таке REST? Чи може REST повертати XML?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Що таке REST
+
+"REST — це не формат даних і не конкретний протокол, а архітектурний стиль побудови API. У REST система будується навколо ресурсів, які доступні по URI, а взаємодія з ними відбувається через стандартні HTTP methods: GET, POST, PUT, PATCH, DELETE."
+
+---
+
+#### Основна ідея REST
+
+"У REST ми працюємо не з командами типу `createUser` або `deleteTransaction`, а з ресурсами, наприклад `/users`, `/transactions`, `/orders/123`.
+Тобто URI описує ресурс, а HTTP method — що ми хочемо з ним зробити."
+
+| Method | URI | Дія |
+|--------|-----|-----|
+| GET | /users | отримати список |
+| GET | /users/10 | отримати одного користувача |
+| POST | /users | створити |
+| PUT | /users/10 | оновити повністю |
+| PATCH | /users/10 | оновити частково |
+| DELETE | /users/10 | видалити |
+
+---
+
+#### Основні принципи REST
+
+1. **Resource-based** — API будується навколо ресурсів
+2. **Stateless** — кожен запит має містити все необхідне для обробки, сервер не зберігає стан між запитами
+3. **Uniform interface** — єдині правила через HTTP methods, URI, status codes, headers
+4. **Client-server** — клієнт і сервер розділені по відповідальності
+5. **Cacheable** — відповіді можуть бути кешовані
+6. **Layered system** — між клієнтом і сервером можуть бути proxy, gateway, load balancer
+
+---
+
+#### Чи обов'язково REST = JSON?
+
+"Ні, REST не прив'язаний тільки до JSON. REST може повертати JSON, XML, HTML, plain text або інший формат. Найчастіше зараз використовують JSON, але технічно REST API може працювати і з XML."
+
+Клієнт вказує бажаний формат через `Accept`:
+```
+Accept: application/json
+Accept: application/xml
+```
+
+Сервер відповідає через `Content-Type`:
+```
+Content-Type: application/json
+Content-Type: application/xml
+```
+
+---
+
+#### Чому зараз частіше JSON, а не XML?
+
+"JSON зараз популярніший, бо він легший, простіший у читанні, природно працює в JavaScript і зазвичай менш багатослівний, ніж XML. XML частіше зустрічається в legacy-системах, enterprise-інтеграціях, SOAP або старих зовнішніх API."
+
+---
+
+#### REST vs SOAP — важлива різниця
+
+"REST і XML не суперечать одне одному. Часто плутають, ніби XML — це про SOAP, а JSON — це про REST. Насправді REST може використовувати XML, а SOAP частіше, але не завжди, асоціюється з XML."
+
+---
+
+#### Готова відповідь одним шматком
+
+"REST — це архітектурний стиль побудови API, а не конкретний формат даних. У REST система будується навколо ресурсів, які мають URI, а операції з ними виконуються через стандартні HTTP methods, такі як GET, POST, PUT, PATCH і DELETE. Один із ключових принципів REST — stateless, тобто кожен запит повинен містити всю інформацію, необхідну для обробки.
+
+REST API не зобов'язаний працювати тільки з JSON. Він цілком може повертати XML, HTML або інші формати. JSON зараз використовується найчастіше, бо він простіший і зручніший для web-клієнтів, але XML у REST теж можливий. Тобто REST — це про архітектуру взаємодії, а JSON/XML — це лише формат представлення даних."
+
+---
+
+#### Коротка шпаргалка
+
+**REST** — архітектурний стиль, ресурси + URI, HTTP methods, stateless
+
+**Чи може бути XML?** — так, REST не прив'язаний до JSON; XML і JSON — це просто формат даних
+
+</details>
+
+---
+
+### 7. CORS
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Що таке CORS
+
+"CORS — це механізм безпеки в браузері, який контролює, чи може frontend з одного origin робити HTTP-запити до іншого origin."
+
+---
+
+#### Що таке origin
+
+Origin = scheme + host + port
+
+Це вже **різні** origin, якщо відрізняється хоча б щось одне:
+
+```
+https://example.com
+http://example.com         ← інший протокол
+https://api.example.com    ← інший домен
+https://example.com:8080   ← інший порт
+```
+
+Приклад: frontend `https://app.example.com` і API `https://api.example.com` — це different origin, отже включається CORS.
+
+---
+
+#### Навіщо потрібен CORS
+
+"CORS потрібен, щоб сторонній сайт не міг просто так через браузер користувача читати відповіді іншого сайту."
+
+- браузер захищає користувача
+- сервер каже, кому він дозволяє cross-origin доступ
+- якщо сервер не дав дозвіл — браузер не дасть JS-коду прочитати response
+
+---
+
+#### Важливий момент: CORS — це не firewall
+
+"CORS — це не мережевий firewall і не захист API від самого факту запиту. Це браузерне обмеження на доступ до response для JavaScript-коду з іншого origin."
+
+- Postman може робити запит
+- curl може робити запит
+- backend-to-backend запит теж пройде
+- а от браузерний JS буде обмежений правилами CORS
+
+---
+
+#### Основні CORS headers
+
+**Access-Control-Allow-Origin** — головний header, який origin дозволений:
+```
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Origin: *
+```
+> `*` не можна комбінувати з credentials.
+
+**Access-Control-Allow-Methods** — які HTTP methods дозволені:
+```
+Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+```
+
+**Access-Control-Allow-Headers** — які request headers дозволені:
+```
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Request-Id
+```
+
+**Access-Control-Allow-Credentials** — чи можна відправляти cookies/credentials:
+```
+Access-Control-Allow-Credentials: true
+```
+
+**Access-Control-Expose-Headers** — які response headers доступні для читання в JS:
+```
+Access-Control-Expose-Headers: X-Request-Id, X-Total-Count
+```
+
+**Access-Control-Max-Age** — скільки кешувати preflight response:
+```
+Access-Control-Max-Age: 600
+```
+
+---
+
+#### Simple request і preflight request
+
+**Simple request** — запит іде одразу без preflight (прості GET/POST/HEAD з безпечними headers).
+
+**Preflight request** — перед основним запитом браузер надсилає `OPTIONS`, щоб перевірити, чи сервер дозволяє такий виклик.
+
+Preflight буває, коли:
+- method не простий: PUT, PATCH, DELETE
+- є нестандартні headers: `Authorization`, `X-Request-Id`
+- `Content-Type: application/json`
+
+---
+
+#### Як виглядає preflight
+
+Браузер надсилає:
+```
+OPTIONS /users/10
+Origin: https://app.example.com
+Access-Control-Request-Method: PUT
+Access-Control-Request-Headers: Authorization, Content-Type
+```
+
+Сервер повинен відповісти:
+```
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+Access-Control-Allow-Headers: Authorization, Content-Type
+Access-Control-Allow-Credentials: true
+```
+
+Тільки після цього браузер відправить основний PUT.
+
+---
+
+#### Чому часто CORS "ламається"
+
+1. Сервер не відповідає на OPTIONS (повертає 404/405 або не дає headers)
+2. Не дозволений потрібний header (frontend шле `Authorization`, а сервер його не вказав)
+3. Не співпадає origin
+4. Використали `*` разом із credentials — класична помилка
+5. Nginx не віддає CORS headers на помилках або на OPTIONS
+
+---
+
+#### Credentials і wildcard
+
+"Якщо frontend працює з cookies або credentials, CORS треба налаштовувати обережно: не можна використовувати `*`, потрібно явно вказувати дозволений origin і включати `Access-Control-Allow-Credentials: true`."
+
+На клієнті також треба:
+```js
+fetch(url, { credentials: 'include' })
+```
+
+---
+
+#### CORS vs CSRF
+
+"CORS не заміняє CSRF protection. Навіть якщо response не можна прочитати, сам небажаний запит іноді все одно може бути відправлений."
+
+- **CORS** — контролює, чи може JS з іншого origin прочитати response
+- **CSRF** — браузер відправляє небажаний запит, бо автоматично додає cookies
+
+---
+
+#### Чому в Postman все працює, а в браузері — CORS error
+
+"Бо CORS перевіряє саме браузер. Postman не підпорядковується browser same-origin policy."
+
+---
+
+#### Готова відповідь одним шматком
+
+"CORS — це браузерний механізм безпеки, який контролює cross-origin запити. Origin визначається як scheme + host + port. Якщо frontend і API знаходяться на різних origin, браузер перевіряє, чи дозволяє сервер такий доступ через CORS headers. Основний header — `Access-Control-Allow-Origin`.
+
+Для простих запитів браузер може одразу відправити request, а для складніших спочатку робить preflight — OPTIONS-запит, у якому перевіряє, чи дозволені method і headers. Якщо сервер повертає правильні CORS headers, браузер дає JavaScript-коду доступ до response.
+
+Важливо розуміти, що CORS — це не захист API від самого факту запиту, а саме браузерне обмеження. Тому Postman або curl можуть працювати навіть там, де браузер показує CORS error. Також CORS не заміняє CSRF protection. Якщо API працює з cookies або credentials, не можна використовувати `*`, треба явно вказувати origin і `Access-Control-Allow-Credentials: true`."
+
+---
+
+#### Коротка шпаргалка
+
+**CORS** — browser security policy, працює для cross-origin, origin = scheme + host + port
+
+**Основні headers** — `Allow-Origin`, `Allow-Methods`, `Allow-Headers`, `Allow-Credentials`
+
+**Preflight** — це OPTIONS, перевіряє method і headers перед основним запитом
+
+**Важливо** — CORS перевіряє браузер; Postman/curl не залежать від CORS; CORS ≠ CSRF protection
+
+</details>
+
+---
+
+### 8. Cookies, Headers, HttpOnly, Session
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Що таке headers
+
+"HTTP headers — це службові метадані запиту і відповіді. Через них передається технічна інформація: тип контенту, авторизація, cookies, cache rules, origin, user-agent та інше."
+
+Приклади request headers: `Authorization`, `Content-Type`, `Accept`, `Cookie`, `Origin`
+
+Приклади response headers: `Set-Cookie`, `Content-Type`, `Cache-Control`, `Location`
+
+---
+
+#### Що таке cookies
+
+"Cookies — це маленькі дані у форматі key-value, які сервер може попросити браузер зберегти, а браузер потім автоматично відправляє їх назад у наступних запитах до того ж сайту залежно від domain/path/flags."
+
+---
+
+#### Як cookies передаються через headers
+
+Сервер → браузер (response header):
+```
+Set-Cookie: session_id=abc123; Path=/; HttpOnly; Secure; SameSite=Lax
+```
+
+Браузер → сервер (request header):
+```
+Cookie: session_id=abc123
+```
+
+"Cookies передаються через HTTP headers: сервер встановлює їх через `Set-Cookie`, а браузер повертає через `Cookie`."
+
+---
+
+#### Чи зберігається сесія в cookie?
+
+"Зазвичай у cookie зберігається не сама сесія, а лише session identifier. Сама session data зазвичай лежить на сервері: у файлах, Redis, database, memory store або іншому session storage."
+
+"Не сесію зберігаємо в cookie, а ключ до неї."
+
+Сервер може зберігати session data у файлах, Redis, Memcached, database, memory.
+
+"У продакшені session storage часто виносять у Redis, особливо якщо application horizontal scalable і працює на кількох інстансах."
+
+---
+
+#### Що таке HttpOnly
+
+"HttpOnly — це cookie flag, який забороняє доступ до cookie з JavaScript через `document.cookie`. Це зменшує ризик крадіжки cookie при XSS."
+
+"HttpOnly захищає cookie від читання JavaScript-кодом у браузері, але не захищає від CSRF і не усуває саму XSS-вразливість."
+
+---
+
+#### Що таке Secure
+
+"Secure означає, що cookie повинна передаватися тільки через HTTPS. По plain HTTP браузер її не відправить."
+
+---
+
+#### Що таке SameSite
+
+"SameSite — це cookie attribute, який контролює, чи буде браузер відправляти cookie в cross-site сценаріях."
+
+| Значення | Поведінка |
+|----------|-----------|
+| `Strict` | Cookie майже не відправляється у cross-site переходах |
+| `Lax` | Більш м'який режим, часто нормальний дефолт |
+| `None` | Cookie можна слати cross-site, але потрібен `Secure` |
+
+"SameSite допомагає зменшити ризик CSRF, бо обмежує автоматичну відправку cookie у cross-site запитах. Але для важливих дій краще також CSRF token."
+
+---
+
+#### Типова login-схема з session
+
+1. Користувач логіниться
+2. Сервер перевіряє credentials
+3. Сервер створює session і генерує session id
+4. Сервер віддає `Set-Cookie: session_id=...`
+5. Браузер зберігає cookie
+6. У наступних запитах браузер автоматично шле `Cookie: session_id=...`
+7. Сервер по session id знаходить session data
+
+У session data на сервері зазвичай: user id, role, csrf token, locale.
+
+---
+
+#### Session cookie vs persistent cookie
+
+- **Session cookie** — живе до закриття браузера
+- **Persistent cookie** — має `Expires` або `Max-Age`, зберігається довше
+
+---
+
+#### Session fixation
+
+"Session fixation — це атака, коли зловмисник змушує користувача увійти в систему з уже відомим session id. Тому після успішного login треба **регенерувати session id**."
+
+---
+
+#### Session auth vs JWT
+
+| | Session auth | JWT |
+|---|---|---|
+| Де стан | На сервері | В токені (claims) |
+| Cookie | session_id | Може зберігатися в cookie |
+| Підхід | Stateful | Stateless |
+
+"Можна зберігати JWT у cookie, але тоді треба правильно налаштовувати HttpOnly, Secure, SameSite і враховувати CSRF-ризики."
+
+---
+
+#### Best practices для cookie/session
+
+- Ставити `HttpOnly`, `Secure`, `SameSite`
+- Регенерувати session id після login
+- Зберігати сесію на сервері, не в cookie
+- Обмежувати lifetime
+- Чистити session при logout
+- Не передавати session id у URL
+- Використовувати HTTPS
+
+---
+
+#### Готова відповідь одним шматком
+
+"HTTP headers — це службові метадані запиту і відповіді. Cookies теж працюють через headers: сервер встановлює їх через `Set-Cookie`, а браузер повертає в `Cookie`. Cookie — це маленьке key-value значення, яке браузер автоматично надсилає серверу залежно від domain, path і flags.
+
+Session — це серверний механізм збереження стану між запитами. У cookie зазвичай зберігається не вся сесія, а тільки session id. Сама session data лежить на сервері, наприклад у файлах, Redis або базі даних. `HttpOnly` означає, що JavaScript не може прочитати cookie через `document.cookie`, `Secure` — що cookie передається тільки через HTTPS, а `SameSite` допомагає обмежити відправку cookie в cross-site сценаріях і зменшує ризик CSRF. Для безпечної session-based auth важливо використовувати HttpOnly, Secure, SameSite, HTTPS і регенерацію session id після login."
+
+---
+
+#### Коротка шпаргалка
+
+**Headers** — технічні метадані HTTP
+
+**Cookies** — key-value у браузері; сервер ставить через `Set-Cookie`, браузер повертає через `Cookie`
+
+**Session** — стан на сервері; у cookie зазвичай лежить тільки `session_id`
+
+**HttpOnly** — JS не може читати cookie
+
+**Secure** — cookie тільки через HTTPS
+
+**SameSite** — обмежує cross-site відправку cookie
 
 </details>
