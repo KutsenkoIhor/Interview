@@ -6,6 +6,7 @@
 2. [Nginx vs Apache, Headers](#2-nginx-vs-apache-headers)
 3. [Протоколи передачі даних: UDP, TCP, HTTP, HTTPS (HTTP/1 vs HTTP/2)](#3-протоколи-передачі-даних-udp-tcp-http-https-HTTP1-vs-HTTP2)
 4. [Від чого захищає HTTPS/TLS, як працює TLS handshake, чи можна перехопити HTTPS](#4-від-чого-захищає-httpstls-як-працює-tls-handshake-чи-можна-перехопити-https)
+5. [XSS, SQL Injection, CSRF, Broken Authentication](#5-xss-sql-injection-csrf-broken-authentication)
 
 ---
 
@@ -614,5 +615,159 @@ ClientHello → ServerHello + certificate → перевірка сертифі�
 - на reverse proxy / load balancer (TLS termination)
 - на клієнті, якщо скомпрометований
 - у dev tools браузера
+
+</details>
+
+---
+
+### 5. XSS, SQL Injection, CSRF, Broken Authentication
+
+<details>
+<summary>Розкрити:</summary>
+
+#### XSS (Cross-Site Scripting)
+
+"XSS — це вразливість, коли в сторінку потрапляє неперевірений або неекранований користувацький ввід, і браузер виконує його як JavaScript. У результаті зловмисник може виконати код у браузері іншого користувача."
+
+Що може статися: крадіжка сесії або токена, підміна контенту, виконання дій від імені користувача, редірект на фейковий сайт, крадіжка даних із форми.
+
+**Де виникає:** коли користувацький текст вставляють у HTML без escaping, у шаблонах якщо виводити raw HTML, у JS якщо небезпечно вставляти значення в DOM.
+
+**Види XSS:**
+- **Stored XSS** — шкідливий код зберігається в БД і потім віддається іншим користувачам
+- **Reflected XSS** — шкідливий ввід одразу повертається у response
+- **DOM-based XSS** — проблема виникає на стороні браузера через небезпечну роботу з DOM
+
+**Як захищатися:**
+- екранувати output залежно від контексту (HTML, attribute, JS, URL)
+- не вставляти user input як raw HTML
+- використовувати template engine з авто-escaping
+- санітизувати HTML, якщо потрібен rich text
+- використовувати CSP
+- не зберігати чутливі токени в місцях, доступних JS, без потреби
+
+"Основний принцип захисту від XSS — не довіряти user input і правильно escape-ити output саме в тому контексті, де він використовується."
+
+---
+
+#### SQL Injection
+
+"SQL Injection — це вразливість, коли користувацький ввід потрапляє в SQL-запит як частина SQL-синтаксису, а не просто як дані. Це може дозволити змінити логіку запиту, прочитати чужі дані, змінити або видалити дані в базі."
+
+**Де виникає:** коли SQL збирають конкатенацією рядків, коли filter/search/sort/limit підставляються без валідації, у сирих SQL-запитах без параметризації.
+
+**Як захищатися:**
+- prepared statements / bind parameters
+- ORM / query builder
+- whitelist для sortable/filterable fields
+- не підставляти назви колонок, direction, table names без перевірки
+- мінімальні права для DB user
+
+"Prepared statements добре захищають значення, але не вирішують автоматично проблему з динамічними назвами колонок, таблиць або sort direction. Для цього потрібен whitelist."
+
+---
+
+#### CSRF (Cross-Site Request Forgery)
+
+"CSRF — це атака, коли браузер авторизованого користувача змушують відправити небажаний запит на інший сайт, де цей користувач уже залогінений."
+
+**Суть просто:**
+1. Користувач залогінений у системі
+2. Він відкриває шкідливу сторінку
+3. Браузер автоматично додає cookies до запиту на цільовий сайт
+4. Сайт думає, що це легітимна дія користувача
+
+Що може статися: зміна пароля, email, створення платежу, видалення даних, будь-яка state-changing дія.
+
+Особливо актуально для cookie-based auth. Для stateless API з Bearer token у header ризик нижчий, бо браузер сам не підставляє Authorization header так, як cookies.
+
+**Як захищатися:**
+- CSRF token
+- SameSite cookies
+- перевірка Origin / Referer
+- не робити state-changing actions через GET
+- додаткове підтвердження на критичних діях
+
+"CSRF працює не тому, що зловмисник знає сесію, а тому, що браузер сам автоматично додає cookies до запиту."
+
+---
+
+#### Broken Authentication
+
+"Broken Authentication — це широкий клас проблем, пов'язаних із неправильною реалізацією автентифікації, сесій або управління доступом. Через це зловмисник може видати себе за іншого користувача або отримати несанкціонований доступ."
+
+**Типові проблеми:**
+- пароль зберігається не через `password_hash`
+- відсутність rate limit на login / brute force
+- predictable session ids
+- неправильна робота logout (токен не відкликається)
+- довгий lifetime токенів без ротації
+- відсутність MFA
+- session fixation
+- username enumeration через різні повідомлення про помилки
+- сесія не перестворюється після login
+
+**Як захищатися:**
+- `password_hash` / `password_verify`
+- MFA
+- rate limiting / throttling
+- secure session management
+- короткий lifetime access token, rotation для refresh token
+- revoke механізм
+- `Secure`, `HttpOnly`, `SameSite` cookies
+- аудит логінів і підозрілих сесій
+
+"Broken Authentication — це не одна конкретна вразливість, а цілий клас помилок у логіні, сесіях, токенах, відновленні доступу та контролі життєвого циклу автентифікації."
+
+---
+
+#### Як коротко порівняти
+
+| | Де проблема | Основний захист |
+|---|---|---|
+| XSS | браузер жертви, небезпечний output | escaping, CSP |
+| SQL Injection | DB layer, небезпечний SQL | prepared statements, whitelist |
+| CSRF | браузер автоматично шле cookies | CSRF token, SameSite |
+| Broken Auth | логін, сесії, токени, password flow | hash, MFA, rate limit, session security |
+
+---
+
+#### Хороші короткі відповіді на follow-up
+
+**Різниця XSS і CSRF?**
+"XSS — зловмисний код виконується в браузері жертви. CSRF — браузер жертви відправляє небажаний запит, бо автоматично додає cookies."
+
+**Чи рятує HttpOnly від XSS?**
+"Він зменшує ризик крадіжки cookie через JavaScript, але не прибирає сам XSS."
+
+**Чи рятує HTTPS від XSS або SQL Injection?**
+"Ні. HTTPS захищає канал передачі, але не логіку додатка."
+
+**Чи prepared statements повністю вирішують SQL Injection?**
+"Для значень — майже так, але для dynamic identifiers (назви колонок, sort direction) потрібен whitelist."
+
+---
+
+#### Готова відповідь одним шматком
+
+"XSS — це вразливість, коли неекранований користувацький ввід потрапляє у сторінку і виконується в браузері як JavaScript. Вона небезпечна тим, що дозволяє красти сесії, токени або виконувати дії від імені користувача. Основний захист — правильний output escaping, safe template rendering і CSP.
+
+SQL Injection — це коли користувацький ввід потрапляє в SQL як частина самого запиту. Через це можна змінити логіку запиту або отримати доступ до даних. Основний захист — prepared statements, bind parameters і whitelist для динамічних полів.
+
+CSRF — це атака, коли браузер уже авторизованого користувача змушують відправити небажаний запит. Особливо актуально для cookie-based auth. Захист — CSRF tokens, SameSite cookies, перевірка Origin/Referer і правильна семантика HTTP methods.
+
+Broken Authentication — це клас проблем, пов'язаних із логіном, сесіями, токенами і password flows. Захист — правильне хешування паролів, MFA, throttling, secure cookie flags, короткі access tokens і контроль життєвого циклу сесії."
+
+---
+
+#### Коротка шпаргалка
+
+**XSS** — user input виконується як JS → захист: escaping, sanitization, CSP
+
+**SQL Injection** — user input ламає SQL → захист: prepared statements, whitelist
+
+**CSRF** — браузер жертви відправляє небажаний запит → захист: CSRF token, SameSite, Origin check
+
+**Broken Auth** — проблеми логіну, токенів, сесій → захист: hash passwords, MFA, rate limit, session security
 
 </details>
