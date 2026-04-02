@@ -10,6 +10,22 @@
 
 4. [Що таке нормалізація бази даних і навіщо вона потрібна? Що таке денормалізація, коли її доцільно використовувати і які компроміси вона створює?](#4)
 
+## Блок 2. Типи даних і зберігання значень
+
+5. [Як правильно обирати типи даних в SQL під конкретну задачу? Розкажіть про числові типи (INT, BIGINT, DECIMAL, FLOAT, DOUBLE), типи дати й часу (DATE, DATETIME, TIMESTAMP, TIME), рядкові типи (CHAR, VARCHAR) та поясніть, чому FLOAT і DOUBLE не варто використовувати для фінансових розрахунків.](#5)
+
+6. [Як зберігати великі або точні числові значення, якщо потрібна висока точність? Поясніть, коли слід використовувати DECIMAL, коли зберігати значення як integer у мінімальних одиницях, і які ризики виникають при використанні floating-point типів.](#6)
+
+7. [Як у базі даних зберігається ENUM, у чому його переваги та які проблеми він може створювати? Поясніть внутрішнє зберігання, обмеження при зміні значень, portability issues та альтернативи у вигляді довідкових таблиць або application-level enum.](#7)
+
+## Блок 3. Моделювання даних і ключі
+
+8. [Які типи зв'язків між сутностями існують у реляційних базах даних? Поясніть one-to-one, one-to-many, many-to-many та способи їх реалізації на рівні таблиць.](#8)
+
+9. [Що таке первинний ключ, зовнішній ключ і в чому різниця між первинним та унікальним ключем? Поясніть їхню роль у цілісності даних, індексації та зв'язках між таблицями.](#9)
+
+10. [Що таке referential integrity і як СУБД забезпечує контроль цілісності зв'язків? Поясніть роль foreign key constraints, cascade operations та наслідки відсутності контролю цілісності.](#10)
+
 ---
 
 <a id="1"></a>
@@ -614,5 +630,1132 @@ REFRESH MATERIALIZED VIEW order_summary; -- оновлення за розкла
 - **Кешовані агрегати** (likes_count) — найпоширеніша денормалізація
 - **Матеріалізовані views** — денормалізація на рівні БД з автооновленням
 - **Правило**: спочатку нормалізуй, потім денормалізуй там де є вимірений performance issue
+
+</details>
+---
+
+<a id="5"></a>
+
+### 5. Як правильно обирати типи даних в SQL під конкретну задачу? Розкажіть про числові типи (INT, BIGINT, DECIMAL, FLOAT, DOUBLE), типи дати й часу (DATE, DATETIME, TIMESTAMP, TIME), рядкові типи (CHAR, VARCHAR) та поясніть, чому FLOAT і DOUBLE не варто використовувати для фінансових розрахунків.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Правильний вибір типу даних впливає на коректність результатів, продуктивність запитів і розмір бази. Основний принцип: обирати найменший тип, що покриває потреби задачі — це економить місце, пришвидшує індекси і зменшує ймовірність помилок.
+
+---
+
+#### Числові типи
+
+**Цілі числа:**
+
+| Тип | Байти | Діапазон (signed) | Діапазон (unsigned) |
+|-----|-------|-------------------|---------------------|
+| TINYINT | 1 | -128 … 127 | 0 … 255 |
+| SMALLINT | 2 | -32 768 … 32 767 | 0 … 65 535 |
+| MEDIUMINT | 3 | -8M … 8M | 0 … 16M |
+| INT | 4 | -2.1B … 2.1B | 0 … 4.3B |
+| BIGINT | 8 | -9.2×10¹⁸ … 9.2×10¹⁸ | 0 … 1.8×10¹⁹ |
+
+```sql
+-- INT достатньо для більшості PK, але BIGINT потрібен якщо:
+-- - таблиця може перевищити 2 млрд рядків
+-- - зовнішні ID (Twitter snowflake, UUID-like числа)
+CREATE TABLE users (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    age TINYINT UNSIGNED,        -- 0-255, вистачить для віку
+    score SMALLINT               -- рейтинг, лічильники до 32K
+);
+
+-- UNSIGNED: якщо значення не може бути від'ємним — подвоює діапазон
+```
+
+---
+
+#### FLOAT і DOUBLE — проблема точності
+
+`FLOAT` (4 байти) і `DOUBLE` (8 байтів) — числа з плаваючою крапкою в форматі IEEE 754. Вони **не можуть точно представити більшість десяткових дробів**.
+
+```sql
+-- Проблема: 0.1 + 0.2 ≠ 0.3 в бінарному поданні
+SELECT 0.1 + 0.2;
+-- Результат: 0.30000000000000004  ← не 0.3!
+
+CREATE TABLE prices (price FLOAT);
+INSERT INTO prices VALUES (9.99);
+SELECT price * 100 FROM prices;
+-- Результат: 998.9999694824219  ← не 999!
+
+-- Накопичення помилок при багатьох операціях:
+SELECT SUM(price) FROM orders;
+-- Кожне додавання додає мікропомилку → велика розбіжність на тисячах рядків
+```
+
+**Причина:** 0.1 в двійковій системі — нескінченний дріб (як 1/3 у десятковій). IEEE 754 округлює його, і ця похибка накопичується.
+
+---
+
+#### DECIMAL — точні числа
+
+`DECIMAL(M, D)` зберігає числа як рядок цифр, без плаваючої крапки. Точний, але повільніший і займає більше місця.
+
+```sql
+-- DECIMAL(10, 2) — до 10 цифр загалом, 2 після крапки
+-- Макс: 99 999 999.99
+
+CREATE TABLE transactions (
+    amount      DECIMAL(15, 2),   -- до 9.99 трлн
+    tax_rate    DECIMAL(5, 4),    -- 0.1234 = 12.34%
+    exchange    DECIMAL(10, 6)    -- курси валют з 6 знаками
+);
+
+-- Точний результат:
+SELECT 0.1 + 0.2;           -- 0.3 (якщо DECIMAL)
+SELECT 9.99 * 100;          -- 999.00 ✓
+SELECT SUM(amount) FROM transactions;  -- точна сума без дрейфу
+```
+
+**Правило для фінансів:** завжди `DECIMAL`, ніколи `FLOAT`/`DOUBLE`.
+
+---
+
+#### Типи дати й часу
+
+| Тип | Формат | Діапазон | Байти | Зберігає TZ? |
+|-----|--------|----------|-------|--------------|
+| DATE | YYYY-MM-DD | 1000-01-01 … 9999-12-31 | 3 | Ні |
+| TIME | HH:MM:SS | -838:59:59 … 838:59:59 | 3 | Ні |
+| DATETIME | YYYY-MM-DD HH:MM:SS | 1000-01-01 … 9999-12-31 | 8 | Ні |
+| TIMESTAMP | YYYY-MM-DD HH:MM:SS | 1970-01-01 … 2038-01-19 | 4 | Так (UTC) |
+| YEAR | YYYY | 1901 … 2155 | 1 | Ні |
+
+```sql
+CREATE TABLE events (
+    id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    birth_date  DATE,                    -- тільки дата, без часу
+    start_time  TIME,                    -- тривалість або час доби
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- авто UTC
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    scheduled   DATETIME                 -- для дат після 2038 або локального часу
+);
+```
+
+**TIMESTAMP vs DATETIME:**
+
+```sql
+-- TIMESTAMP: зберігається в UTC, відображається в часовому поясі сесії
+SET time_zone = '+02:00';
+INSERT INTO events (created_at) VALUES (NOW());  -- зберігає UTC
+SET time_zone = '+05:00';
+SELECT created_at FROM events;  -- показує +5:00, внутрішньо той самий UTC
+
+-- DATETIME: зберігається "як є", без конвертації
+-- Проблема 2038: TIMESTAMP переповнюється 19 січня 2038 (Unix time 2^31)
+-- → для дат після 2038 або event scheduling використовуй DATETIME
+```
+
+---
+
+#### Рядкові типи
+
+**CHAR vs VARCHAR:**
+
+| | CHAR(N) | VARCHAR(N) |
+|---|---------|------------|
+| Зберігання | Фіксована N байт завжди | Реальна довжина + 1-2 байти |
+| Паддинг | Доповнюється пробілами до N | Ні |
+| Швидкість | Швидший для fixed-length | Ефективніший для змінної довжини |
+| Коли | Коди, хеші, фіксовані поля | Імена, адреси, описи |
+
+```sql
+-- CHAR — для полів з фіксованою довжиною
+country_code CHAR(2),       -- 'UA', 'DE' — завжди 2 символи
+md5_hash     CHAR(32),      -- завжди 32 символи
+uuid         CHAR(36),      -- UUID як рядок
+
+-- VARCHAR — для полів зі змінною довжиною
+name         VARCHAR(255),  -- ім'я: 3-100 символів реально
+email        VARCHAR(320),  -- макс довжина email за RFC
+description  VARCHAR(2000)
+```
+
+**TEXT і BLOB:**
+
+```sql
+-- TEXT — великі рядки (не індексуються повністю без prefix index)
+-- TINYTEXT   — до 255 байт
+-- TEXT       — до 65 KB
+-- MEDIUMTEXT — до 16 MB
+-- LONGTEXT   — до 4 GB
+
+-- BLOB — бінарні дані (те саме, але байти)
+-- Краще зберігати файли в S3/CDN, а в БД — тільки URL
+```
+
+---
+
+#### JSON тип (MySQL 5.7+)
+
+```sql
+CREATE TABLE products (
+    id      INT PRIMARY KEY,
+    name    VARCHAR(255),
+    attrs   JSON  -- гнучкі атрибути
+);
+
+INSERT INTO products VALUES (1, 'Phone', '{"color": "black", "ram": 8}');
+
+-- Вибірка з JSON:
+SELECT attrs->>'$.color' FROM products WHERE id = 1;
+
+-- Індекс на JSON-поле (virtual column):
+ALTER TABLE products ADD COLUMN ram INT
+    GENERATED ALWAYS AS (attrs->>'$.ram') VIRTUAL;
+CREATE INDEX idx_ram ON products(ram);
+```
+
+---
+
+#### Практичні правила вибору типів
+
+```sql
+-- ✓ Правильно
+id              BIGINT UNSIGNED AUTO_INCREMENT  -- PK з запасом
+price           DECIMAL(10, 2)                  -- гроші
+is_active       TINYINT(1)  або  BOOLEAN        -- прапорець
+created_at      TIMESTAMP                        -- час події
+birth_date      DATE                             -- тільки дата
+status          ENUM('active','inactive','banned') -- обмежений набір
+country_code    CHAR(2)                          -- фіксована довжина
+
+-- ✗ Типові помилки
+price           FLOAT        -- втрата точності в фінансах
+id              INT          -- переповнення при > 2.1B рядків
+created_at      VARCHAR(20)  -- дата як рядок — немає сортування/індексу
+is_active       VARCHAR(5)   -- 'true'/'false' замість BOOLEAN
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **INT/BIGINT** — цілі числа; BIGINT для PK великих таблиць, UNSIGNED якщо немає від'ємних
+- **DECIMAL(M,D)** — точні числа; обов'язково для грошей і фінансів
+- **FLOAT/DOUBLE** — IEEE 754, накопичують похибку → тільки для наукових обчислень де точність до копійки не потрібна
+- **TIMESTAMP** — UTC, авто-оновлення, обмежений 2038 роком
+- **DATETIME** — локальний час, без TZ конвертації, до 9999 року
+- **CHAR(N)** — фіксована довжина (коди, хеші); **VARCHAR(N)** — змінна (імена, тексти)
+- **Правило**: найменший тип що покриває задачу → менше місця, швидші індекси
+
+</details>
+
+---
+
+<a id="6"></a>
+
+### 6. Як зберігати великі або точні числові значення, якщо потрібна висока точність? Поясніть, коли слід використовувати DECIMAL, коли зберігати значення як integer у мінімальних одиницях, і які ризики виникають при використанні floating-point типів.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Для точних числових значень є три підходи: `DECIMAL` (точний десятковий тип у БД), **integer у мінімальних одиницях** (зберігати копійки замість гривень), і **рядок** (для дуже великих чисел поза діапазоном SQL). Floating-point (`FLOAT`/`DOUBLE`) — не варіант там де потрібна точність, через фундаментальну обмеженість IEEE 754.
+
+---
+
+#### Чому floating-point ламає точність
+
+Комп'ютер зберігає числа в двійковій системі. Десяткові дроби як `0.1` або `0.3` не мають точного бінарного представлення — так само, як `1/3` не має точного десяткового.
+
+```sql
+-- Демонстрація проблеми:
+SELECT 0.1 + 0.2;               -- 0.30000000000000004
+SELECT 1.00 - 0.99;             -- 0.010000000000000009
+SELECT 0.1 * 3;                 -- 0.30000000000000004
+
+-- Накопичення помилки на реальних даних:
+CREATE TABLE sales_float (amount FLOAT);
+INSERT INTO sales_float VALUES (9.99), (9.99), (9.99), (9.99), (9.99);
+SELECT SUM(amount) FROM sales_float;
+-- Результат: 49.950001525878906  ← не 49.95!
+
+-- Порівняння — ще небезпечніше:
+SELECT * FROM products WHERE price = 9.99;
+-- Може не знайти рядок, якщо зберіглось 9.990000152...
+```
+
+**Технічна причина:** `FLOAT` має 23 біти мантиси (~7 значущих цифр), `DOUBLE` — 52 біти (~15-16 цифр). При множенні/діленні похибки перемножуються.
+
+---
+
+#### DECIMAL — точний десятковий тип
+
+`DECIMAL(M, D)` зберігає числа як рядок цифр у двійково-десятковому кодуванні (BCD). Арифметика виконується точно.
+
+```sql
+-- DECIMAL(M, D): M — всього цифр, D — після крапки
+-- Максимум: DECIMAL(65, 30)
+
+-- Фінансові значення:
+amount          DECIMAL(15, 2)   -- до 9 999 999 999 999.99
+tax_rate        DECIMAL(6, 4)    -- 0.1250 = 12.50%
+exchange_rate   DECIMAL(12, 6)   -- 1.085432
+
+-- Перевірка точності:
+CREATE TABLE sales_dec (amount DECIMAL(10,2));
+INSERT INTO sales_dec VALUES (9.99), (9.99), (9.99), (9.99), (9.99);
+SELECT SUM(amount) FROM sales_dec;
+-- Результат: 49.95  ✓ точно!
+
+SELECT 0.1 + 0.2;  -- якщо обидва DECIMAL → 0.3 ✓
+```
+
+**Обмеження DECIMAL:**
+- Повільніший за INT/BIGINT (арифметика складніша)
+- Займає більше місця: ~4 байти на кожні 9 цифр
+- Максимум 65 значущих цифр — для криптовалютних розрахунків може бути мало
+
+---
+
+#### Integer у мінімальних одиницях
+
+Зберігати суму в найменших неподільних одиницях (копійках, центах, сатоші) як ціле число. Найпопулярніший підхід у платіжних системах.
+
+```sql
+-- Замість DECIMAL(10,2) для гривень:
+amount_cents BIGINT NOT NULL  -- 999 = 9.99 грн
+
+-- Приклади:
+INSERT INTO transactions (amount_cents) VALUES (9999);   -- 99.99 грн
+INSERT INTO transactions (amount_cents) VALUES (100000); -- 1000.00 грн
+
+-- Відображення: ділимо в коді або в запиті
+SELECT amount_cents / 100.0 AS amount FROM transactions;
+
+-- Переваги:
+-- ✓ Арифметика цілих чисел — максимально швидка і точна
+-- ✓ BIGINT вміщує до 9.2×10¹⁸ копійок = 92 квадрильйони гривень
+-- ✓ Немає проблем з округленням при порівнянні
+-- ✓ Зручно для мультивалютності: amount + currency_code
+
+-- Crypto (satoshi для BTC):
+amount_satoshi BIGINT  -- 1 BTC = 100_000_000 satoshi
+```
+
+**Коли integer краще за DECIMAL:**
+- Продуктивність критична (фінтех із мільйонами транзакцій)
+- Потрібні битові операції або дуже швидкий SUM/COUNT
+- Інтеграція з мовами де integer точніший за decimal (Go, Rust)
+
+---
+
+#### Порівняння підходів
+
+| | FLOAT/DOUBLE | DECIMAL | Integer (cents) |
+|---|---|---|---|
+| Точність | ❌ Приблизна | ✓ Точна | ✓ Точна |
+| Швидкість | ✓ Найшвидший | Середня | ✓ Найшвидший |
+| Місце | 4/8 байт | ~4 байти / 9 цифр | 8 байт (BIGINT) |
+| Макс. значення | ~1.8×10³⁰⁸ | 10⁶⁵ | ~9.2×10¹⁸ |
+| Зручність | Проста арифметика | Природний вигляд | Потрібна конвертація |
+| Коли | Наука, ML, координати | Фінанси, загальний випадок | Платежі, висока perf |
+
+---
+
+#### Дуже великі числа (поза BIGINT)
+
+Якщо число перевищує можливості BIGINT або DECIMAL(65):
+
+```sql
+-- Варіант 1: DECIMAL з великою точністю
+amount DECIMAL(38, 0)  -- до 10^38, ціле
+
+-- Варіант 2: зберігати як рядок (для відображення, не обчислень)
+big_number VARCHAR(100)
+-- Мінус: не можна сортувати числово, немає арифметики в БД
+
+-- Варіант 3: два поля (high/low) для 128-bit чисел
+amount_high BIGINT UNSIGNED,  -- старші 64 біти
+amount_low  BIGINT UNSIGNED   -- молодші 64 біти
+-- Обчислення в коді застосунку
+
+-- На практиці: для crypto (ETH wei = 10^18 за 1 ETH):
+-- wei можуть бути до ~10^27 → DECIMAL(38,0) або VARCHAR
+amount_wei DECIMAL(38, 0)
+```
+
+---
+
+#### Округлення: де і як
+
+```sql
+-- ROUND — математичне округлення (0.5 → 1)
+SELECT ROUND(2.5);   -- 3
+SELECT ROUND(2.555, 2);  -- 2.56
+
+-- TRUNCATE — відкидає знаки без округлення
+SELECT TRUNCATE(2.999, 2);  -- 2.99
+
+-- FLOOR / CEILING
+SELECT FLOOR(2.9);   -- 2
+SELECT CEILING(2.1); -- 3
+
+-- Банківське округлення (round half to even) — MySQL не підтримує нативно
+-- Потрібно реалізовувати в коді застосунку для бухгалтерії
+```
+
+**Правило:** округлення має відбуватись **один раз** — в кінці обчислення, не на кожному проміжному кроці. Інакше похибки накопичуються.
+
+---
+
+#### Практичні патерни
+
+```sql
+-- Платіжна система: cents + currency
+CREATE TABLE payments (
+    id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    amount_cents  BIGINT NOT NULL,           -- 1234 = $12.34
+    currency      CHAR(3) NOT NULL,          -- 'USD', 'UAH'
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Бухгалтерія: DECIMAL з явною точністю
+CREATE TABLE invoices (
+    subtotal      DECIMAL(15, 2) NOT NULL,
+    tax_rate      DECIMAL(5, 4) NOT NULL,    -- 0.2000 = 20%
+    tax_amount    DECIMAL(15, 2) NOT NULL,   -- обчислено і збережено
+    total         DECIMAL(15, 2) NOT NULL
+);
+
+-- Курси валют
+CREATE TABLE exchange_rates (
+    from_currency CHAR(3),
+    to_currency   CHAR(3),
+    rate          DECIMAL(20, 10),           -- висока точність для курсів
+    updated_at    TIMESTAMP
+);
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **FLOAT/DOUBLE** — IEEE 754, похибка вже на 0.1+0.2 → ніколи для грошей
+- **DECIMAL(M,D)** — точна десяткова арифметика → гроші, ставки, курси
+- **Integer (cents/satoshi)** → найшвидший і точний варіант, потрібна конвертація при відображенні
+- **BIGINT** для cents покриває до 92 квадрильйонів гривень — вистачить завжди
+- **Округлення** — один раз, в кінці обчислення, не проміжно
+- **Crypto** з великими числами → `DECIMAL(38, 0)` або розрахунки в коді
+
+</details>
+
+---
+
+<a id="7"></a>
+
+### 7. Як у базі даних зберігається ENUM, у чому його переваги та які проблеми він може створювати? Поясніть внутрішнє зберігання, обмеження при зміні значень, portability issues та альтернативи у вигляді довідкових таблиць або application-level enum.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+`ENUM` в MySQL — це рядковий тип, який внутрішньо зберігається як ціле число. На вигляд зручний: обмежує значення переліком, займає мало місця. Але при зміні допустимих значень вимагає `ALTER TABLE`, що є дорогою операцією на великих таблицях. Через це і через проблеми з портабельністю багато команд замінюють `ENUM` на довідкові таблиці або перевірки на рівні застосунку.
+
+---
+
+#### Внутрішнє зберігання
+
+MySQL зберігає `ENUM` не як рядок, а як **порядковий номер** відповідного значення в списку (1-based index). Самі рядки зберігаються один раз у метаданих таблиці (`.frm` файл або системний каталог).
+
+```sql
+CREATE TABLE orders (
+    id     INT PRIMARY KEY,
+    status ENUM('pending', 'processing', 'shipped', 'delivered', 'cancelled')
+);
+
+-- Внутрішньо:
+-- 'pending'    → 1
+-- 'processing' → 2
+-- 'shipped'    → 3
+-- 'delivered'  → 4
+-- 'cancelled'  → 5
+-- NULL         → NULL
+-- ''  (invalid)→ 0  (у non-strict режимі)
+
+-- Перевірка реального розміру:
+INSERT INTO orders VALUES (1, 'shipped');
+-- Зберігається: 1 байт (до 255 значень) або 2 байти (256-65535)
+
+-- Можна порівнювати і як рядок, і як число:
+SELECT * FROM orders WHERE status = 'shipped';    -- рядкове порівняння
+SELECT * FROM orders WHERE status = 3;            -- числове (те саме)
+SELECT * FROM orders ORDER BY status;             -- сортує за індексом, не алфавітом!
+```
+
+**Розмір зберігання:**
+- 1-255 значень → 1 байт на рядок
+- 256-65535 значень → 2 байти на рядок
+
+---
+
+#### Переваги ENUM
+
+```sql
+-- 1. Економія місця vs VARCHAR
+-- status VARCHAR(20) = 9-12 байт ('processing')
+-- status ENUM(...)   = 1 байт
+
+-- 2. Вбудована валідація
+INSERT INTO orders VALUES (2, 'unknown');
+-- ERROR 1265: Data truncated for column 'status'
+-- Некоректні значення відхиляються автоматично
+
+-- 3. Читабельність в запитах
+SELECT * FROM orders WHERE status = 'delivered';
+-- vs INT: SELECT * FROM orders WHERE status_id = 4
+
+-- 4. Компактний індекс
+CREATE INDEX idx_status ON orders(status);
+-- Індекс по 1-байтовому числу — менший і швидший ніж по VARCHAR
+```
+
+---
+
+#### Проблеми ENUM
+
+**1. ALTER TABLE при зміні значень**
+
+```sql
+-- Потрібно додати новий статус 'refunded':
+ALTER TABLE orders
+    MODIFY status ENUM('pending','processing','shipped','delivered','cancelled','refunded');
+
+-- На таблиці з 50 млн рядків це:
+-- MySQL < 5.6: повне перезаписування таблиці (table rebuild) — години простою
+-- MySQL 5.6+: якщо додаємо в кінець → instant (метадані тільки)
+-- Але: перейменування, видалення, зміна порядку → завжди table rebuild!
+
+-- Видалення значення — ще небезпечніше:
+ALTER TABLE orders
+    MODIFY status ENUM('pending','processing','shipped','delivered');
+-- Всі рядки з 'cancelled' стануть '' або NULL → втрата даних!
+```
+
+**2. Сортування за індексом, не алфавітом**
+
+```sql
+SELECT DISTINCT status FROM orders ORDER BY status;
+-- Результат: pending, processing, shipped, delivered, cancelled
+-- (у порядку оголошення, не алфавітному)
+
+-- Щоб отримати алфавітне сортування:
+SELECT DISTINCT status FROM orders ORDER BY CAST(status AS CHAR);
+```
+
+**3. Portability issues**
+
+```sql
+-- ENUM — нестандартний тип, є тільки в MySQL/MariaDB
+-- PostgreSQL: має власний ENUM але інший синтаксис
+-- SQLite, MSSQL, Oracle: не мають ENUM взагалі
+
+-- PostgreSQL ENUM:
+CREATE TYPE order_status AS ENUM ('pending', 'shipped', 'delivered');
+CREATE TABLE orders (status order_status);
+-- Теж вимагає ALTER TYPE для зміни:
+ALTER TYPE order_status ADD VALUE 'refunded';  -- можна тільки додати, не видалити!
+
+-- Міграція MySQL → PostgreSQL або SQLite потребує трансформації типу
+```
+
+**4. Складна інтроспекція**
+
+```sql
+-- Отримати список допустимих значень:
+SELECT COLUMN_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'orders' AND COLUMN_NAME = 'status';
+-- Результат: enum('pending','processing','shipped','delivered','cancelled')
+-- Парсити цей рядок у коді — незручно
+
+-- Порівняно з lookup-таблицею:
+SELECT code FROM order_statuses;  -- чистий SELECT
+```
+
+---
+
+#### Альтернатива 1: Довідкова таблиця (Lookup Table)
+
+```sql
+-- Замість ENUM — окрема таблиця з допустимими значеннями
+CREATE TABLE order_statuses (
+    code        VARCHAR(20) PRIMARY KEY,  -- 'pending', 'shipped'
+    label       VARCHAR(50),              -- 'В обробці', 'Відправлено'
+    sort_order  TINYINT,
+    is_active   BOOLEAN DEFAULT TRUE
+);
+
+INSERT INTO order_statuses VALUES
+    ('pending',    'Очікує',     1, TRUE),
+    ('processing', 'В обробці',  2, TRUE),
+    ('shipped',    'Відправлено',3, TRUE),
+    ('delivered',  'Доставлено', 4, TRUE),
+    ('cancelled',  'Скасовано',  5, TRUE),
+    ('refunded',   'Повернено',  6, TRUE);  -- додати новий: тільки INSERT!
+
+CREATE TABLE orders (
+    id     INT PRIMARY KEY,
+    status VARCHAR(20) NOT NULL REFERENCES order_statuses(code)
+);
+
+-- Переваги:
+-- ✓ Додати нове значення: INSERT (без ALTER TABLE)
+-- ✓ Видалити: UPDATE is_active = FALSE (soft delete)
+-- ✓ Додаткові метадані: мітки, сортування, кольори для UI
+-- ✓ Портабельно між будь-якими СУБД
+-- ✓ Зміна label без зміни коду
+
+-- Недоліки:
+-- JOIN потрібен для відображення label
+-- Трохи більше місця (VARCHAR vs 1 байт)
+```
+
+**Альтернатива 2: TINYINT + константи в коді**
+
+```sql
+CREATE TABLE orders (
+    id     INT PRIMARY KEY,
+    status TINYINT UNSIGNED NOT NULL
+    -- 1=pending, 2=processing, 3=shipped ...
+);
+
+-- Enum в PHP/Go/Java — константи або enum тип мови
+// PHP
+const STATUS_PENDING    = 1;
+const STATUS_PROCESSING = 2;
+// або PHP 8.1 enum:
+enum OrderStatus: int {
+    case Pending    = 1;
+    case Processing = 2;
+    case Shipped    = 3;
+}
+```
+
+**Альтернатива 3: CHECK constraint (PostgreSQL, MySQL 8.0.16+)**
+
+```sql
+-- MySQL 8.0.16+ і PostgreSQL підтримують CHECK:
+CREATE TABLE orders (
+    id     INT PRIMARY KEY,
+    status VARCHAR(20) NOT NULL,
+    CHECK (status IN ('pending', 'processing', 'shipped', 'delivered', 'cancelled'))
+);
+
+-- Зміна списку: ALTER TABLE (теж потрібен), але більш портабельно ніж ENUM
+```
+
+---
+
+#### Порівняння підходів
+
+| | ENUM | Lookup Table | TINYINT + app enum | CHECK |
+|---|---|---|---|---|
+| Місце | 1 байт | FK + рядок | 1 байт | рядок |
+| Додати значення | ALTER TABLE | INSERT | змінити код | ALTER TABLE |
+| Видалити значення | Небезпечно | Soft delete | змінити код | ALTER TABLE |
+| Портабельність | ❌ MySQL only | ✓ | ✓ | ✓ (8.0+) |
+| Додаткові метадані | ❌ | ✓ | в коді | ❌ |
+| Читабельність SQL | ✓ | ✓ (з JOIN) | ❌ числа | ✓ |
+| Валідація | ✓ БД | ✓ FK | в застосунку | ✓ БД |
+
+---
+
+#### Коли що обирати
+
+- **ENUM** — невеликий стабільний перелік (стать, пріоритет), команда не планує міграцію між СУБД, значення точно не змінюватимуться
+- **Lookup table** — значення можуть розширюватись, потрібні метадані (labels, sort), потрібна портабельність
+- **TINYINT + app enum** — мікросервіс з чіткою відповідальністю, продуктивність критична
+- **CHECK constraint** — стандартний SQL, значення змінюються рідко, немає потреби в метаданих
+
+---
+
+#### Міні-шпаргалка
+
+- **ENUM** зберігається як 1-2 байти (порядковий номер), рядки — у метаданих таблиці
+- **Сортування** ENUM — за порядком оголошення, не алфавітом
+- **Додавання в кінець** в MySQL 5.6+ — instant; будь-яка інша зміна — table rebuild
+- **Видалення значення** з ENUM → рядки стають `''` або `NULL` → небезпечно
+- **Портабельності немає** — ENUM специфічний для MySQL/MariaDB
+- **Lookup table** — гнучкіша альтернатива: додавання через INSERT, soft delete, метадані
+
+</details>
+
+---
+
+<a id="8"></a>
+
+### 8. Які типи зв'язків між сутностями існують у реляційних базах даних? Поясніть one-to-one, one-to-many, many-to-many та способи їх реалізації на рівні таблиць.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+У реляційних БД є три типи зв'язків між таблицями: **one-to-one**, **one-to-many** і **many-to-many**. Всі реалізуються через зовнішні ключі (`FOREIGN KEY`), а many-to-many — додатково через проміжну (junction) таблицю.
+
+---
+
+#### One-to-One (1:1)
+
+Один запис таблиці A відповідає рівно одному запису таблиці B.
+
+```sql
+-- Користувач і його профіль (рідко змінюваний / великий блок даних)
+CREATE TABLE users (
+    id    INT PRIMARY KEY,
+    email VARCHAR(255)
+);
+
+CREATE TABLE user_profiles (
+    user_id    INT PRIMARY KEY,          -- PK і FK одночасно
+    bio        TEXT,
+    avatar_url VARCHAR(500),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+```
+
+**Коли використовувати:** розбиття широкої таблиці на основну + розширену (часто читана частина + рідко читана), або різні права доступу до частин даних.
+
+---
+
+#### One-to-Many (1:N)
+
+Один запис таблиці A відповідає багатьом записам таблиці B. Найпоширеніший тип зв'язку.
+
+```sql
+-- Один користувач — багато замовлень
+CREATE TABLE customers (
+    id   INT PRIMARY KEY,
+    name VARCHAR(255)
+);
+
+CREATE TABLE orders (
+    id          INT PRIMARY KEY,
+    customer_id INT NOT NULL,            -- FK на сторону "many"
+    total       DECIMAL(10,2),
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+);
+
+-- Запит: всі замовлення конкретного клієнта
+SELECT o.* FROM orders o
+WHERE o.customer_id = 42;
+```
+
+**Де живе FK:** завжди на стороні "many" (orders.customer_id, не в customers).
+
+---
+
+#### Many-to-Many (M:N)
+
+Один запис A пов'язаний з багатьма B, і один запис B — з багатьма A. Реалізується через **junction table** (проміжна таблиця).
+
+```sql
+-- Студенти і курси: студент може бути на багатьох курсах,
+-- курс може мати багато студентів
+
+CREATE TABLE students (id INT PRIMARY KEY, name VARCHAR(255));
+CREATE TABLE courses  (id INT PRIMARY KEY, title VARCHAR(255));
+
+CREATE TABLE student_courses (          -- junction table
+    student_id INT NOT NULL,
+    course_id  INT NOT NULL,
+    enrolled_at DATE,                   -- можна додавати атрибути зв'язку
+    PRIMARY KEY (student_id, course_id),
+    FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id)  REFERENCES courses(id)  ON DELETE CASCADE
+);
+
+-- Всі курси студента:
+SELECT c.title FROM courses c
+JOIN student_courses sc ON sc.course_id = c.id
+WHERE sc.student_id = 1;
+```
+
+---
+
+#### Порівняння
+
+| Тип | Де FK | Приклад |
+|-----|-------|---------|
+| 1:1 | У дочірній таблиці (також PK) | users ↔ user_profiles |
+| 1:N | На стороні "many" | customers → orders |
+| M:N | Junction table з двома FK | students ↔ courses |
+
+---
+
+#### Міні-шпаргалка
+
+- **1:1** — FK у дочірній таблиці є одночасно PK; `ON DELETE CASCADE` щоб не лишались сироти
+- **1:N** — найпоширеніший; FK завжди на стороні "many"
+- **M:N** — junction table з composite PK `(fk1, fk2)`; можна додавати атрибути зв'язку (дата, роль)
+- Каскади: `ON DELETE CASCADE` видаляє дочірні при видаленні батьківського; `SET NULL` — обнуляє FK
+
+</details>
+
+---
+
+<a id="9"></a>
+
+### 9. Що таке первинний ключ, зовнішній ключ і в чому різниця між первинним та унікальним ключем? Поясніть їхню роль у цілісності даних, індексації та зв'язках між таблицями.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+**Primary Key (PK)** — унікально ідентифікує кожен рядок таблиці. **Foreign Key (FK)** — посилається на PK іншої таблиці, забезпечуючи referential integrity. **Unique Key** — теж гарантує унікальність значень, але на відміну від PK допускає `NULL` і може бути кілька на таблицю.
+
+---
+
+#### Primary Key
+
+```sql
+-- Варіант 1: surrogate key (авто-генерований)
+CREATE TABLE users (
+    id    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE
+);
+
+-- Варіант 2: natural key (з предметної області)
+CREATE TABLE countries (
+    code CHAR(2) PRIMARY KEY,   -- 'UA', 'DE' — природно унікальний
+    name VARCHAR(100)
+);
+
+-- Варіант 3: composite PK
+CREATE TABLE order_items (
+    order_id   INT NOT NULL,
+    product_id INT NOT NULL,
+    quantity   INT,
+    PRIMARY KEY (order_id, product_id)   -- разом — унікальні
+);
+```
+
+**Властивості PK:**
+- Значення унікальне в межах таблиці
+- `NOT NULL` — обов'язково (не може бути невідомим ідентифікатором)
+- Автоматично створює **кластерний індекс** (InnoDB) — дані фізично зберігаються у порядку PK
+- Тільки один PK на таблицю
+
+**Surrogate vs Natural key:**
+
+| | Surrogate (INT/BIGINT AUTO_INCREMENT) | Natural (email, code) |
+|---|---|---|
+| Стабільність | Не змінюється | Може змінитись (email) |
+| JOIN | Компактний (4-8 байт) | Може бути широким |
+| Читабельність | Треба JOIN для відображення | Зрозумілий сам по собі |
+| Рекомендація | Для більшості таблиць | Якщо природно унікальний і стабільний |
+
+---
+
+#### Foreign Key
+
+```sql
+CREATE TABLE orders (
+    id          INT PRIMARY KEY,
+    customer_id INT NOT NULL,
+    status      VARCHAR(20),
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+        ON DELETE RESTRICT    -- заборонити видалення клієнта якщо є замовлення
+        ON UPDATE CASCADE     -- змінити customer_id скрізь при зміні PK
+);
+
+-- Варіанти ON DELETE / ON UPDATE:
+-- RESTRICT / NO ACTION — заборонити операцію (дефолт)
+-- CASCADE              — повторити операцію в дочірніх рядках
+-- SET NULL             — обнулити FK (колонка має бути nullable)
+-- SET DEFAULT          — встановити дефолтне значення
+```
+
+**Що дає FK:**
+- **Referential integrity** — неможливо вставити `customer_id = 999` якщо такого клієнта немає
+- **Автоматичний індекс** — MySQL автоматично створює індекс на FK-колонку (прискорює JOIN і перевірку при DELETE батьківського рядка)
+- Документує зв'язки між таблицями на рівні схеми
+
+**Увага:** FK перевірки додають overhead при INSERT/UPDATE/DELETE. В деяких high-load системах FK вимикають і перевіряють цілісність на рівні застосунку.
+
+---
+
+#### PRIMARY KEY vs UNIQUE KEY
+
+```sql
+CREATE TABLE users (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,  -- PK
+    email         VARCHAR(255) NOT NULL UNIQUE,        -- Unique
+    phone         VARCHAR(20) UNIQUE,                  -- Unique, але NULL дозволений
+    username      VARCHAR(50) NOT NULL UNIQUE
+);
+```
+
+| | PRIMARY KEY | UNIQUE KEY |
+|---|---|---|
+| NULL | ❌ Не допускається | ✓ Допускається (скільки завгодно NULL) |
+| Кількість | Тільки один на таблицю | Скільки завгодно |
+| Індекс (InnoDB) | Кластерний (дані = індекс) | Некластерний (вторинний) |
+| FK може посилатись | ✓ | ✓ (якщо NOT NULL) |
+| Семантика | Ідентифікатор рядка | Бізнес-унікальність |
+
+**Чому NULL у UNIQUE не порушує унікальність:**
+SQL-стандарт: `NULL ≠ NULL`, тому кілька `NULL` у UNIQUE-колонці — допустимо. Кожен NULL вважається невідомим значенням.
+
+```sql
+-- Це ОК:
+INSERT INTO users (email, phone) VALUES ('a@a.com', NULL);
+INSERT INTO users (email, phone) VALUES ('b@b.com', NULL);  -- два NULL — нормально
+INSERT INTO users (email, phone) VALUES ('c@c.com', NULL);  -- ок
+
+-- А це — помилка:
+INSERT INTO users (email, phone) VALUES ('d@d.com', '+380501234567');
+INSERT INTO users (email, phone) VALUES ('e@e.com', '+380501234567');  -- Duplicate!
+```
+
+---
+
+#### Індексація та продуктивність
+
+```sql
+-- InnoDB: PK = clustered index
+-- Всі дані таблиці зберігаються у B-tree, відсортованому за PK
+-- → пошук за PK = прямий доступ до даних (найшвидший)
+
+-- Вторинний індекс (UNIQUE, INDEX) зберігає значення ключа + PK
+-- → пошук за вторинним індексом = знайти PK → пройти по кластерному індексу
+
+-- Тому широкий PK (VARCHAR UUID) → більший розмір всіх вторинних індексів
+-- Рекомендація: INT або BIGINT AUTO_INCREMENT як PK
+
+-- Перевірка індексів таблиці:
+SHOW INDEX FROM users;
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **PK** — унікальний ідентифікатор рядка, NOT NULL, один на таблицю, кластерний індекс в InnoDB
+- **FK** — посилання на PK іншої таблиці, гарантує referential integrity, автоматично індексується
+- **UNIQUE** — унікальність значень, дозволяє NULL, кілька на таблицю, некластерний індекс
+- **Surrogate key** (AUTO_INCREMENT) — стабільніший і компактніший ніж natural key
+- **ON DELETE CASCADE** — видаляє дочірні рядки; **RESTRICT** — блокує видалення батьківського
+- **NULL у UNIQUE**: кілька NULL — допустимо (`NULL ≠ NULL` за SQL-стандартом)
+
+</details>
+
+---
+
+<a id="10"></a>
+
+### 10. Що таке referential integrity і як СУБД забезпечує контроль цілісності зв'язків? Поясніть роль foreign key constraints, cascade operations та наслідки відсутності контролю цілісності.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+**Referential integrity (цілісність посилань)** — гарантія того, що зовнішній ключ у дочірній таблиці завжди вказує на реально існуючий рядок у батьківській, або має значення `NULL`. СУБД забезпечує це через FK constraints: перевіряє кожен INSERT/UPDATE/DELETE і відхиляє операцію або виконує каскадну дію, якщо вона порушує зв'язок.
+
+---
+
+#### Як FK constraint перевіряє цілісність
+
+```sql
+CREATE TABLE customers (
+    id   INT PRIMARY KEY,
+    name VARCHAR(255)
+);
+
+CREATE TABLE orders (
+    id          INT PRIMARY KEY,
+    customer_id INT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+);
+
+-- 1. INSERT у дочірню — перевірка існування батьківського рядка
+INSERT INTO orders (id, customer_id) VALUES (1, 999);
+-- ERROR 1452: Cannot add or update a child row:
+-- a foreign key constraint fails (customers id=999 не існує)
+
+-- 2. DELETE батьківського — перевірка відсутності дочірніх
+DELETE FROM customers WHERE id = 1;
+-- ERROR 1451: Cannot delete or update a parent row:
+-- a foreign key constraint fails (є orders з customer_id=1)
+
+-- 3. UPDATE PK батьківського
+UPDATE customers SET id = 100 WHERE id = 1;
+-- Теж заблоковано (якщо ON UPDATE RESTRICT)
+```
+
+**Коли перевірка відбувається:** при кожному `INSERT`, `UPDATE`, `DELETE` на таблицях з FK. InnoDB перевіряє constraint до запису змін, у межах тієї самої транзакції.
+
+---
+
+#### Cascade operations
+
+Замість відхилення операції СУБД може автоматично виконати дію у дочірніх рядках.
+
+```sql
+-- Приклад з різними стратегіями
+CREATE TABLE orders (
+    id          INT PRIMARY KEY,
+    customer_id INT,
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+        ON DELETE CASCADE     -- видалити замовлення разом з клієнтом
+        ON UPDATE CASCADE     -- оновити customer_id скрізь при зміні PK
+);
+
+CREATE TABLE order_items (
+    id       INT PRIMARY KEY,
+    order_id INT,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+        ON DELETE CASCADE     -- ланцюговий CASCADE: видалення клієнта → orders → order_items
+);
+```
+
+**Всі варіанти ON DELETE / ON UPDATE:**
+
+| Дія | Поведінка |
+|-----|-----------|
+| `RESTRICT` | Відхилити операцію (дефолт, перевіряється одразу) |
+| `NO ACTION` | Те саме що RESTRICT, але перевірка — в кінці транзакції |
+| `CASCADE` | Повторити операцію (видалення/оновлення) у дочірніх |
+| `SET NULL` | Встановити FK = NULL (колонка має бути nullable) |
+| `SET DEFAULT` | Встановити дефолтне значення FK (рідко підтримується) |
+
+```sql
+-- SET NULL: замість видалення — "відв'язати" дочірні рядки
+CREATE TABLE posts (
+    id        INT PRIMARY KEY,
+    author_id INT,                     -- nullable
+    FOREIGN KEY (author_id) REFERENCES users(id)
+        ON DELETE SET NULL             -- видалення user → author_id = NULL
+);
+
+-- CASCADE ланцюговий — небезпека:
+DELETE FROM customers WHERE id = 1;
+-- → видаляє orders з customer_id=1
+-- → видаляє order_items де order_id в цих orders
+-- → видаляє payments, shipments...
+-- Один DELETE може видалити тисячі рядків у кількох таблицях!
+```
+
+---
+
+#### DEFERRED constraints (відкладені перевірки)
+
+У PostgreSQL можна відкласти перевірку FK до кінця транзакції — корисно при циклічних зв'язках або пакетному завантаженні даних:
+
+```sql
+-- PostgreSQL
+ALTER TABLE orders
+    ADD CONSTRAINT fk_customer
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+    DEFERRABLE INITIALLY DEFERRED;
+
+BEGIN;
+INSERT INTO orders (customer_id) VALUES (999);   -- ще не перевіряється
+INSERT INTO customers (id) VALUES (999);          -- тепер клієнт є
+COMMIT;  -- ← перевірка відбувається тут → OK
+```
+
+MySQL не підтримує DEFERRED constraints — перевірка завжди негайна.
+
+---
+
+#### Вимкнення FK перевірок
+
+```sql
+-- MySQL: тимчасово вимкнути для масового завантаження або міграції
+SET FOREIGN_KEY_CHECKS = 0;
+
+LOAD DATA INFILE 'orders.csv' INTO TABLE orders;  -- без перевірок
+TRUNCATE TABLE customers;                          -- без CASCADE помилки
+
+SET FOREIGN_KEY_CHECKS = 1;
+-- Увага: після увімкнення СУБД не перевіряє вже існуючі порушення!
+-- Потрібно самостійно переконатись у цілісності.
+
+-- Перевірити сирітські рядки після:
+SELECT o.id FROM orders o
+LEFT JOIN customers c ON o.customer_id = c.id
+WHERE c.id IS NULL;   -- "сироти" — orders без клієнта
+```
+
+---
+
+#### Наслідки відсутності контролю цілісності
+
+Якщо FK constraints відсутні або вимкнені — відповідальність за цілісність переходить до застосунку. Типові проблеми:
+
+```
+1. Orphan records (сирітські рядки)
+   orders.customer_id = 42, але customers(42) видалено
+   → JOIN повертає NULL, звіти некоректні
+
+2. Ghost references
+   Видалення user не видаляє sessions, tokens, audit_log
+   → витік персональних даних, GDPR-порушення
+
+3. Подвійне видалення
+   Без CASCADE — потрібно видаляти вручну у правильному порядку
+   → розробник забуде один з 5 зв'язків → сирітські рядки
+
+4. Race condition
+   Два запити одночасно: один видаляє клієнта, інший створює замовлення
+   → без FK constraint → замовлення з неіснуючим клієнтом
+```
+
+**Коли свідомо відмовляються від FK:**
+- High-load системи де overhead FK перевірок критичний (мікросекунди на операцію)
+- Шардовані БД — FK між таблицями на різних серверах неможливий
+- NoSQL або event-sourcing архітектури — цілісність через eventual consistency
+- При цьому цілісність перевіряється в коді або асинхронно
+
+---
+
+#### Діагностика порушень цілісності
+
+```sql
+-- Знайти сирітські рядки (orphan records)
+SELECT o.id, o.customer_id
+FROM orders o
+LEFT JOIN customers c ON o.customer_id = c.id
+WHERE c.id IS NULL;
+
+-- Перевірити всі FK в таблиці
+SELECT
+    CONSTRAINT_NAME,
+    TABLE_NAME,
+    COLUMN_NAME,
+    REFERENCED_TABLE_NAME,
+    REFERENCED_COLUMN_NAME
+FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+WHERE TABLE_SCHEMA = 'mydb'
+  AND REFERENCED_TABLE_NAME IS NOT NULL;
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Referential integrity** — FK завжди вказує на існуючий рядок або NULL
+- **RESTRICT** — блокує операцію (дефолт); **CASCADE** — повторює у дочірніх; **SET NULL** — обнуляє FK
+- **Ланцюговий CASCADE** — може видалити тисячі рядків в кількох таблицях, використовувати обережно
+- **DEFERRED** — PostgreSQL дозволяє відкласти перевірку до кінця транзакції; MySQL — ні
+- **Вимкнення FK** (`FOREIGN_KEY_CHECKS=0`) — для міграцій, але після — перевірити сиріт вручну
+- **Без FK** → orphan records, витік даних, race conditions — цілісність тільки в коді
 
 </details>
