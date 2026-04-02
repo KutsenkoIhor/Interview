@@ -24,6 +24,24 @@
 
 10. [Що таке HTTP headers і cookies, як вони передаються між клієнтом і сервером, і як ними керувати?](#10)
 
+## Блок 3. Cookies, sessions, CORS
+
+11. [Які основні атрибути cookies існують і як вони впливають на безпеку? Розкажіть про HttpOnly, Secure, SameSite, Domain, Path, Expires/Max-Age.](#11)
+
+12. [Як працюють сесії в PHP і як вони пов'язані з cookies? Де зберігаються дані сесії, що міститься в cookie, і які є ризики.](#12)
+
+13. [Як працюють cookies між основним доменом і субдоменами, і які тут є обмеження безпеки?](#13)
+
+14. [Що таке CORS і як працює механізм cross-origin запитів у браузері? Поясніть preflight request, OPTIONS, Access-Control-Allow-*, credentials.](#14)
+
+## Блок 4. Веб-сервери та інфраструктура
+
+15. [У чому різниця між Nginx і Apache, і в яких сценаріях доцільніше використовувати кожен із них?](#15)
+
+16. [Як Nginx визначає, який server block обробить запит? Поясніть роль listen, server_name, default server і Host header.](#16)
+
+17. [Як коректно визначити реальний IP користувача в застосунку, якщо запит проходить через Nginx, reverse proxy або load balancer? Поясніть X-Forwarded-For, X-Real-IP, trusted proxies.](#17)
+
 ---
 
 <a id="1"></a>
@@ -1390,5 +1408,1351 @@ X-RateLimit-Remaining: 42
 - **SameSite=Lax** — захист від CSRF для більшості сценаріїв
 - **PHP**: `setcookie()` для запису, `$_COOKIE` для читання, `header()` для response headers
 - **Symfony**: `$request->headers->get()`, `$response->headers->set()`, `Cookie::create()`
+
+</details>
+
+---
+
+<a id="11"></a>
+
+### 11. Які основні атрибути cookies існують і як вони впливають на безпеку? Розкажіть про HttpOnly, Secure, SameSite, Domain, Path, Expires/Max-Age.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Cookie — це не просто пара key=value. Разом із значенням сервер може передати набір атрибутів, які визначають: коли cookie живе, куди відправляється, хто може її читати і в яких сценаріях браузер її взагалі надішле. Правильне налаштування атрибутів — це базова частина безпеки веб-застосунку. Неправильні атрибути відкривають вектори для XSS, CSRF, перехоплення і session hijacking.
+
+```
+Set-Cookie: session_id=abc123; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600
+```
+
+---
+
+#### HttpOnly
+
+```
+Set-Cookie: session_id=abc123; HttpOnly
+```
+
+Забороняє читати cookie через `document.cookie` у JavaScript. Cookie все одно відправляється браузером із кожним запитом, але JS-код на сторінці не має до неї доступу.
+
+**Навіщо:** захист від XSS. Якщо зловмисник впровадив скрипт на сторінку, він не зможе вкрасти session cookie через `document.cookie`.
+
+**Важливо:** HttpOnly не усуває XSS — він лише знижує збиток від нього. Скрипт все одно може робити запити від імені користувача.
+
+**Коли ставити:** на всі session і auth cookies. Якщо cookie потрібна в JS (наприклад CSRF token для читання) — тоді HttpOnly не ставлять.
+
+---
+
+#### Secure
+
+```
+Set-Cookie: session_id=abc123; Secure
+```
+
+Браузер відправляє cookie тільки через HTTPS. По HTTP — не відправляє взагалі.
+
+**Навіщо:** захист від перехоплення у незашифрованому трафіку. Без `Secure` cookie може потрапити в plain HTTP запит і бути перехоплена в мережі.
+
+**Коли ставити:** завжди на продакшені. Виняток — локальна розробка без HTTPS (localhost).
+
+---
+
+#### SameSite
+
+Контролює чи відправляє браузер cookie разом із cross-site запитами. Основний захист від CSRF.
+
+**`SameSite=Strict`**
+```
+Set-Cookie: session_id=abc123; SameSite=Strict
+```
+Cookie не відправляється взагалі в жодному cross-site сценарії — ні при навігації, ні при запитах. Навіть якщо користувач переходить за посиланням із зовнішнього сайту, cookie не буде відправлена при першому запиті.
+
+Максимальний захист від CSRF, але може ламати UX — наприклад SSO або переходи за посиланнями з email.
+
+**`SameSite=Lax`**
+```
+Set-Cookie: session_id=abc123; SameSite=Lax
+```
+Cookie відправляється при top-level navigation (переходи по GET-посиланнях), але не відправляється при cross-site POST, iframe, img, fetch. Дефолт у сучасних браузерах.
+
+Хороший баланс між безпекою і зручністю для більшості застосунків.
+
+**`SameSite=None`**
+```
+Set-Cookie: session_id=abc123; SameSite=None; Secure
+```
+Cookie відправляється в будь-яких cross-site запитах. Потрібен для: embedded widgets, OAuth flows між доменами, cross-origin API з cookies. При `None` обов'язково потрібен `Secure`.
+
+---
+
+#### Domain
+
+```
+Set-Cookie: session_id=abc123; Domain=example.com
+```
+
+Визначає для яких доменів browser відправляє cookie.
+
+- Без `Domain` — cookie відправляється тільки для точного домену з якого прийшла
+- `Domain=example.com` — відправляється для `example.com` і всіх його субдоменів: `app.example.com`, `api.example.com`
+- Не можна встановити Domain для чужого домену — браузер проігнорує
+
+**Ризик:** занадто широкий Domain відкриває cookie для всіх субдоменів. Якщо один субдомен скомпрометований — cookie доступна всім.
+
+---
+
+#### Path
+
+```
+Set-Cookie: admin_token=xyz; Path=/admin
+```
+
+Визначає для яких URL paths браузер відправляє cookie.
+
+- `Path=/` — для всіх шляхів (дефолт)
+- `Path=/admin` — тільки для запитів до `/admin` і вкладених шляхів
+- Cookie з `Path=/admin` не буде відправлена на `/api/users`
+
+**Практичне використання:** рідко використовується для безпеки, бо JS на тій самій сторінці може читати cookies з інших Path (якщо немає HttpOnly). Більше для організації — наприклад адмінський токен тільки для адмін-роуту.
+
+---
+
+#### Expires і Max-Age
+
+Визначають час життя cookie.
+
+**`Expires`** — конкретна дата:
+```
+Set-Cookie: token=abc; Expires=Wed, 01 Jan 2026 00:00:00 GMT
+```
+
+**`Max-Age`** — кількість секунд від поточного моменту (пріоритет над `Expires`):
+```
+Set-Cookie: token=abc; Max-Age=3600
+```
+
+**Session cookie** — без `Expires` і `Max-Age`. Живе до закриття браузера (або до завершення браузерної сесії).
+
+**Важливо:** "закриття браузера" не завжди означає видалення session cookies — багато браузерів відновлюють сесію. Тому для чутливих токенів краще явно встановлювати короткий `Max-Age`.
+
+---
+
+#### Повна картина — приклад хорошого налаштування
+
+```
+# Session cookie для авторизації
+Set-Cookie: session_id=abc123;
+            Path=/;
+            HttpOnly;
+            Secure;
+            SameSite=Lax;
+            Max-Age=3600
+
+# CSRF token (потрібен в JS, тому без HttpOnly)
+Set-Cookie: csrf_token=xyz789;
+            Path=/;
+            Secure;
+            SameSite=Strict;
+            Max-Age=3600
+
+# Токен для cross-origin API
+Set-Cookie: api_token=tok123;
+            Path=/api;
+            HttpOnly;
+            Secure;
+            SameSite=None;
+            Max-Age=900
+```
+
+---
+
+#### Типові помилки
+
+| Помилка | Наслідок |
+|---------|----------|
+| Немає `HttpOnly` на session cookie | XSS може вкрасти cookie |
+| Немає `Secure` | Cookie передається по HTTP, можна перехопити |
+| `SameSite=None` без `Secure` | Браузер відхилить cookie |
+| Занадто широкий `Domain` | Cookie доступна всім субдоменам |
+| Немає `SameSite` | Деякі браузери ставлять `Lax` за замовчуванням, але не всі |
+| Довгий `Max-Age` для auth cookie | Довше вікно для session hijacking |
+
+---
+
+#### Міні-шпаргалка
+
+- **HttpOnly** — JS не читає → захист від XSS-крадіжки
+- **Secure** — тільки HTTPS → захист від перехоплення
+- **SameSite=Lax** — дефолт, захист від CSRF
+- **SameSite=Strict** — максимальний захист, може ламати UX
+- **SameSite=None** — cross-site, обов'язково з Secure
+- **Domain** — для яких доменів/субдоменів (уважно з широкими)
+- **Path** — для яких URL paths
+- **Max-Age** — скільки секунд живе; без нього — session cookie
+
+</details>
+
+---
+
+<a id="12"></a>
+
+### 12. Як працюють сесії в PHP і як вони пов'язані з cookies? Де зберігаються дані сесії, що міститься в cookie, і які є ризики.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Сесія в PHP — це серверний механізм збереження стану між HTTP-запитами. HTTP — stateless протокол, кожен запит незалежний. Сесії вирішують цю проблему: сервер зберігає дані про користувача у себе, а клієнту видає тільки унікальний ідентифікатор — session ID. При кожному наступному запиті клієнт відправляє цей ID, сервер по ньому знаходить дані сесії.
+
+Ключова ідея: **в cookie зберігається тільки session ID, не самі дані.** Дані зберігаються на сервері.
+
+---
+
+#### Як це працює покроково
+
+```
+1. Перший запит (логін):
+   POST /login → сервер перевіряє credentials
+
+2. Сервер створює сесію:
+   session_start()
+   $_SESSION['user_id'] = 42;
+   $_SESSION['role'] = 'admin';
+
+3. PHP генерує унікальний session ID: "f4a9b1c2d3e4..."
+   Зберігає дані на сервері (файл, Redis тощо)
+
+4. Відправляє клієнту:
+   Set-Cookie: PHPSESSID=f4a9b1c2d3e4; Path=/; HttpOnly
+
+5. Наступний запит:
+   Cookie: PHPSESSID=f4a9b1c2d3e4
+
+6. PHP знаходить файл сесії по ID,
+   завантажує $_SESSION і продовжує роботу
+```
+
+---
+
+#### Де зберігаються дані сесії
+
+За замовчуванням PHP зберігає сесії у файлах на сервері:
+```
+/var/lib/php/sessions/sess_f4a9b1c2d3e4
+```
+
+Вміст файлу — серіалізований масив `$_SESSION`:
+```
+user_id|i:42;role|s:5:"admin";csrf|s:32:"abc...";
+```
+
+**Інші варіанти session storage:**
+
+```php
+// Redis (для горизонтального масштабування)
+ini_set('session.save_handler', 'redis');
+ini_set('session.save_path', 'tcp://127.0.0.1:6379');
+
+// Database (через власний handler)
+session_set_save_handler(new DatabaseSessionHandler(), true);
+
+// Memcached
+ini_set('session.save_handler', 'memcached');
+ini_set('session.save_path', '127.0.0.1:11211');
+```
+
+"У продакшені з кількома серверами файлові сесії не підходять — запити можуть потрапляти на різні сервери. Тому зазвичай виносять у Redis або database."
+
+---
+
+#### Основні функції роботи з сесіями в PHP
+
+```php
+// Старт або відновлення сесії (завжди перед будь-якою роботою)
+session_start();
+
+// Запис
+$_SESSION['user_id'] = 42;
+$_SESSION['role'] = 'admin';
+
+// Читання
+$userId = $_SESSION['user_id'] ?? null;
+
+// Видалення конкретного ключа
+unset($_SESSION['role']);
+
+// Очистити всі дані сесії
+session_unset();
+
+// Знищити сесію повністю (при logout)
+session_destroy();
+
+// Отримати поточний session ID
+$id = session_id();
+
+// Регенерувати ID (після логіну — обов'язково)
+session_regenerate_id(true); // true = видалити старий файл
+```
+
+---
+
+#### Регенерація session ID — чому це важливо
+
+```php
+// Після успішного логіну
+if ($credentials_valid) {
+    session_start();
+    session_regenerate_id(true); // ← обов'язково
+    $_SESSION['user_id'] = $user->id;
+}
+```
+
+**Навіщо:** захист від **session fixation**. Атака: зловмисник змушує жертву використовувати відомий йому session ID. Якщо після логіну ID не змінився — зловмисник отримує доступ до авторизованої сесії. Після `session_regenerate_id()` старий ID стає недійсним.
+
+---
+
+#### Налаштування session cookie в PHP
+
+```php
+// php.ini або через ini_set
+session.cookie_httponly = 1    // HttpOnly
+session.cookie_secure = 1      // Secure (тільки HTTPS)
+session.cookie_samesite = Lax  // SameSite
+session.cookie_lifetime = 0    // 0 = session cookie (до закриття браузера)
+session.gc_maxlifetime = 1440  // Час життя даних сесії на сервері (секунди)
+
+// Або програмно перед session_start()
+session_set_cookie_params([
+    'lifetime' => 3600,
+    'path'     => '/',
+    'secure'   => true,
+    'httponly' => true,
+    'samesite' => 'Lax',
+]);
+session_start();
+```
+
+---
+
+#### Ризики і захист
+
+**Session hijacking** — крадіжка session ID і використання чужої сесії.
+
+Захист:
+- `HttpOnly` — JS не може прочитати cookie
+- `Secure` — cookie не передається по HTTP
+- Прив'язка сесії до IP або User-Agent (але обережно — може ламати UX)
+- Короткий `gc_maxlifetime`
+
+**Session fixation** — зловмисник нав'язує жертві відомий session ID.
+
+Захист: `session_regenerate_id(true)` після логіну.
+
+**Session data leakage** — витік даних сесії з сервера.
+
+Захист: не зберігати в `$_SESSION` чутливі дані (паролі, повні номери карток). Зберігати тільки user ID і role.
+
+**Передбачуваний session ID** — якщо ID генерується слабко.
+
+Захист: PHP використовує криптографічно стійкий генератор — не генерувати ID вручну.
+
+**Session за URL** — передача session ID у query string (`?PHPSESSID=...`).
+
+Захист: заборонити через `session.use_only_cookies = 1`.
+
+---
+
+#### Що зберігати в сесії, а що — ні
+
+**Можна:**
+```php
+$_SESSION['user_id'] = 42;
+$_SESSION['role'] = 'admin';
+$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+$_SESSION['locale'] = 'uk';
+```
+
+**Не варто:**
+```php
+// Занадто багато даних — зайве навантаження при кожному запиті
+$_SESSION['full_user_object'] = $user; // завантажуй при потребі з DB
+
+// Чутливі дані
+$_SESSION['password'] = $password; // ніколи
+$_SESSION['credit_card'] = $card;  // ніколи
+```
+
+---
+
+#### Symfony і сесії
+
+У Symfony сесії абстраговані через `SessionInterface`:
+
+```php
+// Запис
+$session->set('user_id', 42);
+
+// Читання
+$userId = $session->get('user_id');
+
+// Видалення
+$session->remove('user_id');
+
+// Повне очищення
+$session->clear();
+
+// Міграція (аналог regenerate_id)
+$session->migrate(true);
+```
+
+Session handler налаштовується у `config/packages/framework.yaml`:
+```yaml
+framework:
+    session:
+        handler_id: Symfony\Component\HttpFoundation\Session\Storage\Handler\RedisSessionHandler
+        cookie_secure: auto
+        cookie_httponly: true
+        cookie_samesite: lax
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **В cookie** — тільки session ID (PHPSESSID), не самі дані
+- **Дані сесії** — на сервері: файли, Redis, DB
+- **`session_start()`** — обов'язково перед будь-якою роботою з `$_SESSION`
+- **`session_regenerate_id(true)`** — після логіну, захист від session fixation
+- **`session_destroy()`** — при logout
+- **Redis** — для горизонтального масштабування
+- **Атрибути cookie**: `HttpOnly`, `Secure`, `SameSite=Lax` — мінімальний набір
+
+</details>
+
+---
+
+<a id="13"></a>
+
+### 13. Як працюють cookies між основним доменом і субдоменами, і які тут є обмеження безпеки?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Поведінка cookies між доменами і субдоменами повністю визначається атрибутом `Domain`. За замовчуванням cookie прив'язана до точного домену, з якого прийшла, і на субдомени не поширюється. Якщо явно вказати `Domain=example.com` — cookie стає доступна для всіх субдоменів. Це зручно для SSO і shared auth між сервісами, але відкриває ризики: якщо один субдомен скомпрометований, він може читати або підробляти cookies інших.
+
+---
+
+#### Domain без явного атрибута
+
+```
+Set-Cookie: session_id=abc; Path=/
+```
+
+Без `Domain` — cookie прив'язана тільки до хоста, що її встановив.
+
+```
+app.example.com  → cookie встановлена
+app.example.com  → cookie відправляється ✓
+api.example.com  → cookie НЕ відправляється ✗
+example.com      → cookie НЕ відправляється ✗
+```
+
+---
+
+#### Domain з явним значенням
+
+```
+Set-Cookie: session_id=abc; Domain=example.com; Path=/
+```
+
+З `Domain=example.com` — cookie доступна для домену і всіх його субдоменів:
+
+```
+example.com        → ✓
+app.example.com    → ✓
+api.example.com    → ✓
+mail.example.com   → ✓
+other.com          → ✗ (чужий домен)
+```
+
+Крапка на початку (`Domain=.example.com`) — це стара нотація з RFC 2109, сучасні браузери трактують `Domain=example.com` і `Domain=.example.com` однаково.
+
+---
+
+#### Не можна встановити cookie для чужого домену
+
+Браузер не дозволить встановити cookie для домену, яким сервер не є:
+
+```
+# Запит прийшов з app.example.com
+Set-Cookie: token=abc; Domain=other.com  → браузер проігнорує
+
+# Запит прийшов з app.example.com
+Set-Cookie: token=abc; Domain=example.com  → ✓ (батьківський домен — ok)
+
+# Запит прийшов з app.example.com
+Set-Cookie: token=abc; Domain=sub.app.example.com  → ✗ (субдомен — не можна)
+```
+
+---
+
+#### Public Suffix List і захист від supercookie
+
+Без обмежень можна було б встановити cookie для `.com` або `.co.uk` — і вона б передавалась на всі сайти у цьому TLD. Браузери це забороняють через **Public Suffix List (PSL)**.
+
+PSL — це список доменів, нижче яких не можна реєструвати спільні cookies. Наприклад:
+- `com`, `org`, `net` — top-level, заборонені
+- `co.uk`, `com.ua` — effective TLD, також заборонені
+- `github.io`, `vercel.app` — кожен subdomain є незалежним, тому `github.io` теж у PSL
+
+```
+Set-Cookie: id=1; Domain=com         → браузер відхилить
+Set-Cookie: id=1; Domain=github.io   → браузер відхилить
+Set-Cookie: id=1; Domain=example.com → ✓
+```
+
+---
+
+#### Ризики широкого Domain
+
+**Компрометація субдомену**
+
+Якщо `Domain=example.com` і `legacy.example.com` має XSS або іншу вразливість — зловмисник через нього може прочитати або підробити cookie для всіх субдоменів, включно з `app.example.com`.
+
+```
+# Зловмисник на legacy.example.com встановлює підроблену cookie
+Set-Cookie: session_id=evil_id; Domain=example.com; Path=/
+# Тепер app.example.com отримає цю cookie і може її прийняти
+```
+
+**Cookie tossing / cookie shadowing**
+
+Субдомен може встановити cookie з тим самим ім'ям що й основний домен, але зі своїм значенням. Браузер відправить обидві — і сервер може прийняти не ту. Захист: перевіряти prefix `__Host-` або `__Secure-`.
+
+---
+
+#### Cookie prefixes — захист від підміни
+
+**`__Secure-` prefix:**
+```
+Set-Cookie: __Secure-session=abc; Secure; Path=/
+```
+Браузер приймає тільки якщо: встановлена через HTTPS і є атрибут `Secure`. Субдомен не може підробити.
+
+**`__Host-` prefix:**
+```
+Set-Cookie: __Host-session=abc; Secure; Path=/
+```
+Найсуворіший варіант. Браузер приймає тільки якщо: HTTPS, є `Secure`, `Path=/`, **і немає `Domain`** (тобто прив'язана строго до хоста). Повністю ізолює cookie від субдоменів.
+
+```
+# app.example.com встановлює
+Set-Cookie: __Host-token=abc; Secure; Path=/
+
+# api.example.com НЕ отримає цю cookie
+# Субдомен НЕ може її перезаписати
+```
+
+---
+
+#### Практичні сценарії
+
+**SSO між субдоменами** — спільна auth cookie:
+```
+Set-Cookie: auth_token=xyz; Domain=example.com; HttpOnly; Secure; SameSite=Lax
+```
+Всі субдомени отримують токен, єдина авторизація.
+
+**Ізольований сервіс** — cookie тільки для одного субдомену:
+```
+Set-Cookie: __Host-api_token=xyz; Secure; Path=/; HttpOnly; SameSite=Strict
+```
+Тільки для `api.example.com`, субдомени не бачать.
+
+**Локальна розробка** — `localhost` — окремий домен, субдоменів немає. `Domain=localhost` у різних браузерах поводиться по-різному, краще взагалі не вказувати `Domain`.
+
+---
+
+#### Міні-шпаргалка
+
+- **Без `Domain`** — cookie тільки для точного хоста, субдомени не отримують
+- **`Domain=example.com`** — cookie для домену і всіх субдоменів
+- **Чужий домен** — браузер відхилить `Set-Cookie` з Domain не свого хоста
+- **Public Suffix List** — захист від cookie для `.com`, `.github.io` тощо
+- **Ризик широкого Domain** — скомпрометований субдомен отримує доступ до всіх cookies
+- **`__Host-` prefix** — найсуворіший захист: строго для одного хоста, без субдоменів
+- **`__Secure-` prefix** — тільки HTTPS, але Domain ще дозволений
+
+</details>
+
+---
+
+<a id="14"></a>
+
+### 14. Що таке CORS і як працює механізм cross-origin запитів у браузері? Поясніть preflight request, OPTIONS, Access-Control-Allow-*, credentials.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+CORS (Cross-Origin Resource Sharing) — це браузерний механізм безпеки, який контролює чи може JavaScript на одному origin робити запити до іншого origin. Origin = scheme + host + port. Якщо хоча б одне відрізняється — origin різний і вступає CORS.
+
+Важливо розуміти: **CORS — це не захист сервера від запитів, а браузерне обмеження на читання відповідей JavaScript-кодом.** Postman, curl і backend-to-backend запити CORS не стосуються — тільки браузер.
+
+---
+
+#### Що таке origin
+
+```
+https://app.example.com:443   — origin
+
+https://app.example.com       — той самий (443 дефолтний)
+http://app.example.com        — інший (протокол)
+https://api.example.com       — інший (хост)
+https://app.example.com:8080  — інший (порт)
+```
+
+---
+
+#### Simple request vs Preflight
+
+CORS розрізняє два типи запитів:
+
+**Simple request** — браузер відправляє одразу без preflight:
+- Method: `GET`, `POST`, `HEAD`
+- Headers: тільки safe headers (`Accept`, `Content-Type: application/x-www-form-urlencoded` або `multipart/form-data` або `text/plain`)
+- Немає кастомних headers
+
+**Preflight request** — браузер спочатку запитує дозвіл через `OPTIONS`:
+- Method: `PUT`, `PATCH`, `DELETE`
+- `Content-Type: application/json`
+- Будь-який кастомний header (`Authorization`, `X-Request-Id` тощо)
+
+---
+
+#### Як виглядає preflight
+
+```
+# 1. Браузер автоматично відправляє OPTIONS
+OPTIONS /api/users/42 HTTP/1.1
+Host: api.example.com
+Origin: https://app.example.com
+Access-Control-Request-Method: PUT
+Access-Control-Request-Headers: Content-Type, Authorization
+
+# 2. Сервер повинен відповісти з дозволами
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Max-Age: 600
+
+# 3. Тільки після успішного preflight браузер відправляє реальний запит
+PUT /api/users/42 HTTP/1.1
+Origin: https://app.example.com
+Authorization: Bearer eyJ...
+Content-Type: application/json
+```
+
+---
+
+#### Основні CORS headers
+
+**`Access-Control-Allow-Origin`** — який origin дозволений:
+```
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Origin: *   # будь-який (не можна з credentials)
+```
+
+**`Access-Control-Allow-Methods`** — дозволені HTTP methods:
+```
+Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+```
+
+**`Access-Control-Allow-Headers`** — дозволені request headers:
+```
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Request-Id
+```
+
+**`Access-Control-Allow-Credentials`** — чи дозволено відправляти cookies і auth:
+```
+Access-Control-Allow-Credentials: true
+```
+
+**`Access-Control-Expose-Headers`** — які response headers JS може читати:
+```
+Access-Control-Expose-Headers: X-Total-Count, X-Request-Id
+```
+За замовчуванням JS бачить тільки safe headers. Решту треба явно дозволити.
+
+**`Access-Control-Max-Age`** — скільки секунд кешувати preflight результат:
+```
+Access-Control-Max-Age: 600
+```
+
+---
+
+#### Credentials — cookies і Authorization
+
+За замовчуванням браузер не відправляє cookies і Authorization header у cross-origin запитах. Щоб увімкнути:
+
+На клієнті (JS):
+```js
+fetch('https://api.example.com/data', {
+    credentials: 'include'  // відправляти cookies
+});
+
+// або axios
+axios.get(url, { withCredentials: true });
+```
+
+На сервері — три умови одночасно:
+```
+Access-Control-Allow-Origin: https://app.example.com  // не *, конкретний origin
+Access-Control-Allow-Credentials: true
+```
+
+Якщо `Access-Control-Allow-Origin: *` і `credentials: 'include'` — браузер заблокує.
+
+---
+
+#### Типові помилки і чому CORS "ламається"
+
+**Сервер не обробляє OPTIONS**
+```
+# Nginx або фреймворк повертає 404 або 405 на OPTIONS
+# preflight провалюється → основний запит не відправляється
+```
+
+**Не дозволений потрібний header**
+```
+# Frontend відправляє Authorization
+# Сервер не вказав його в Access-Control-Allow-Headers
+# → CORS error
+```
+
+**Wildcard з credentials**
+```
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Credentials: true
+# → браузер заблокує, це заборонена комбінація
+```
+
+**CORS headers відсутні на error responses**
+```
+# Сервер повернув 500 без CORS headers
+# Браузер заблокує — JS не побачить навіть статус-код
+```
+
+**Nginx перезаписує або не додає headers на проксованих запитах**
+
+---
+
+#### CORS у Nginx
+
+```nginx
+location /api/ {
+    if ($request_method = 'OPTIONS') {
+        add_header 'Access-Control-Allow-Origin' 'https://app.example.com';
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS';
+        add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type';
+        add_header 'Access-Control-Max-Age' 600;
+        return 204;
+    }
+
+    add_header 'Access-Control-Allow-Origin' 'https://app.example.com' always;
+    proxy_pass http://backend;
+}
+```
+
+`always` — додавати header навіть на помилкових відповідях.
+
+---
+
+#### CORS у Symfony
+
+```php
+// config/packages/nelmio_cors.yaml (NelmioCorsBundle)
+nelmio_cors:
+    defaults:
+        origin_regex: true
+        allow_origin: ['https://app.example.com']
+        allow_methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+        allow_headers: ['Content-Type', 'Authorization']
+        expose_headers: ['X-Total-Count']
+        allow_credentials: true
+        max_age: 600
+    paths:
+        '^/api/': ~
+```
+
+---
+
+#### CORS vs CSRF — важлива різниця
+
+CORS і CSRF часто плутають — це різні механізми:
+
+- **CORS** — обмежує читання відповіді JS з іншого origin
+- **CSRF** — зловмисник змушує браузер відправити небажаний запит (cookies йдуть автоматично)
+
+CORS **не захищає від CSRF**: навіть якщо JS не може прочитати відповідь, сам запит міг вже виконатись на сервері (POST, DELETE). Для захисту від CSRF потрібні CSRF tokens або `SameSite` cookies.
+
+---
+
+#### Міні-шпаргалка
+
+- **CORS** — браузерне обмеження на читання cross-origin відповідей JS-кодом
+- **Origin** = scheme + host + port
+- **Simple request** — іде без preflight (GET/POST з safe headers)
+- **Preflight** — браузер спочатку `OPTIONS`, потім реальний запит
+- **`Allow-Origin: *`** — не можна з `credentials: true`
+- **Credentials** — потребує конкретного origin і `Allow-Credentials: true`
+- **CORS ≠ CSRF** — різні загрози, різні засоби захисту
+- **Postman/curl** — CORS не застосовується, тільки браузер
+
+</details>
+
+---
+
+<a id="15"></a>
+
+### 15. У чому різниця між Nginx і Apache, і в яких сценаріях доцільніше використовувати кожен із них?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Nginx і Apache — два найпоширеніші веб-сервери. Обидва вміють приймати HTTP-запити, віддавати статичні файли і проксувати запити до backend. Але вони принципово різні за архітектурою, що визначає їх сильні і слабкі сторони.
+
+Apache з'явився раніше (1995) і довго домінував. Nginx (2004) створювався як відповідь на проблему C10K — одночасне обслуговування тисяч з'єднань. Сьогодні Nginx часто використовується як reverse proxy і load balancer перед Apache або іншим backend.
+
+---
+
+#### Архітектура — ключова різниця
+
+**Apache — process/thread-based модель:**
+```
+Кожне з'єднання → окремий процес або потік
+MPM prefork:  кожне з'єднання = окремий процес (важкий)
+MPM worker:   кожне з'єднання = потік у процесі (легший)
+MPM event:    асинхронніший, але все одно thread-based
+```
+
+При великій кількості одночасних з'єднань кожен потік/процес займає пам'ять навіть якщо просто чекає на повільний клієнт.
+
+**Nginx — event-driven, асинхронна модель:**
+```
+Кілька worker процесів (зазвичай = кількість CPU cores)
+Кожен worker обробляє тисячі з'єднань через event loop
+З'єднання не блокує worker — він переходить до наступного
+```
+
+Nginx споживає значно менше пам'яті при великій кількості одночасних з'єднань.
+
+---
+
+#### Статичний контент
+
+**Nginx** значно швидший для роздачі статики: зображень, CSS, JS, файлів. Event loop не витрачає час на очікування — одразу переходить до наступного запиту.
+
+**Apache** теж роздає статику, але менш ефективно при великій кількості одночасних запитів.
+
+---
+
+#### .htaccess — унікальна можливість Apache
+
+Apache підтримує `.htaccess` — файл конфігурації на рівні директорії, який можна розміщати поряд із кодом застосунку:
+
+```apache
+# .htaccess
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+Options -Indexes
+Header set X-Frame-Options "SAMEORIGIN"
+```
+
+Це дозволяє розгортати застосунки без доступу до основного конфігу сервера — зручно для shared hosting. Nginx `.htaccess` не підтримує — вся конфігурація централізована у `nginx.conf`.
+
+**Мінус `.htaccess`:** Apache перечитує `.htaccess` при кожному запиті для кожної директорії в шляху — це overhead. Nginx уникає цього повністю.
+
+---
+
+#### Модулі
+
+**Apache** має динамічну систему модулів — `mod_rewrite`, `mod_ssl`, `mod_php`, `mod_security` тощо. Модулі можна вмикати/вимикати без перекомпіляції.
+
+`mod_php` дозволяє запускати PHP прямо всередині Apache процесу — зручно, але означає що кожен Apache процес тягне PHP навіть для статичних запитів.
+
+**Nginx** не має вбудованого PHP. PHP-запити проксуються до PHP-FPM через FastCGI. Це насправді краща архітектура: Nginx обробляє статику сам, PHP-FPM — тільки PHP. Розподіл відповідальності чітший.
+
+---
+
+#### Nginx як reverse proxy і load balancer
+
+Nginx дуже часто використовується не як прямий веб-сервер, а як reverse proxy перед backend:
+
+```nginx
+upstream backend {
+    server 127.0.0.1:9000;
+    server 127.0.0.1:9001;
+    server 127.0.0.1:9002;
+}
+
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    location /static/ {
+        root /var/www;
+        expires 1y;
+    }
+
+    location / {
+        proxy_pass http://backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+Типова схема: `Internet → Nginx (SSL, static, load balance) → PHP-FPM / Node / Python / Java`
+
+---
+
+#### Порівняння
+
+| | Nginx | Apache |
+|---|---|---|
+| Архітектура | Event-driven, async | Process/thread-based |
+| Статичний контент | Дуже швидко | Повільніше при навантаженні |
+| Пам'ять при навантаженні | Мало | Більше (потоки/процеси) |
+| `.htaccess` | Не підтримує | Підтримує |
+| PHP | Через PHP-FPM (FastCGI) | mod_php або PHP-FPM |
+| Конфігурація | Централізована | Централізована + .htaccess |
+| Reverse proxy | Відмінно | Є, але не основна роль |
+| Документація/екосистема | Велика | Дуже велика, давня |
+
+---
+
+#### Коли що вибирати
+
+**Nginx:**
+- Новий проект з повним контролем над сервером
+- Потрібен reverse proxy, load balancer, SSL termination
+- Висока кількість одночасних з'єднань
+- Роздача статичних файлів під навантаженням
+- Мікросервісна архітектура
+
+**Apache:**
+- Shared hosting де `.htaccess` обов'язковий
+- Легасі-проект де вже є Apache і `.htaccess`
+- Потрібна гнучка конфігурація на рівні директорій без доступу до основного конфігу
+- Специфічні модулі яких немає в Nginx
+
+**Обидва разом:**
+Nginx як frontend (SSL, static, proxy) → Apache як backend (PHP через mod_php, .htaccess). Рідше зустрічається на нових проектах, але є на legacy.
+
+---
+
+#### Nginx + PHP-FPM — типова схема
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+    root /var/www/html/public;
+    index index.php;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+
+    location ~* \.(css|js|jpg|png|svg|ico)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Nginx** — event-driven, мало пам'яті, швидка статика, відмінний reverse proxy
+- **Apache** — thread-based, підтримує `.htaccess`, mod_php, широка екосистема
+- **Головна різниця** — архітектура обробки з'єднань: async vs thread per connection
+- **На практиці** — Nginx як entry point (SSL, static, proxy), PHP-FPM для PHP
+- **Apache доцільний** — shared hosting, legacy, `.htaccess`-залежні проекти
+
+</details>
+
+---
+
+<a id="16"></a>
+
+### 16. Як Nginx визначає, який server block обробить запит? Поясніть роль listen, server_name, default server і Host header.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Nginx може мати кілька `server` блоків в конфігурації — кожен описує віртуальний хост. При надходженні запиту Nginx проходить двоетапний вибір: спочатку за `listen` (IP і порт), потім за `server_name` (Host header). Якщо жоден `server_name` не підходить — запит потрапляє до дефолтного server block.
+
+---
+
+#### Крок 1 — вибір за listen (IP:port)
+
+Nginx дивиться на IP і порт запиту і відбирає всі server blocks, що слухають на цій комбінації.
+
+```nginx
+server {
+    listen 80;              # всі IP, порт 80
+}
+
+server {
+    listen 192.168.1.1:80;  # конкретний IP, порт 80
+}
+
+server {
+    listen 443 ssl;         # всі IP, порт 443
+}
+```
+
+Якщо підходить кілька блоків — переходимо до кроку 2.
+
+---
+
+#### Крок 2 — вибір за server_name (Host header)
+
+З відібраних server blocks Nginx шукає збіг з `Host` header запиту.
+
+```nginx
+server {
+    listen 80;
+    server_name example.com www.example.com;
+}
+
+server {
+    listen 80;
+    server_name api.example.com;
+}
+
+server {
+    listen 80;
+    server_name ~^app\d+\.example\.com$;  # regex
+}
+```
+
+Пріоритет server_name від вищого до нижчого:
+
+```
+1. Точний збіг:          example.com
+2. Wildcard на початку:  *.example.com
+3. Wildcard в кінці:     example.*
+4. Regex (~/^...$/):     ~^app\d+\.example\.com$
+5. Дефолтний server:     default_server або перший у списку
+```
+
+---
+
+#### default_server
+
+Якщо жоден `server_name` не підійшов — запит іде до `default_server`:
+
+```nginx
+server {
+    listen 80 default_server;
+    server_name _;   # _ — спеціальний placeholder для "нічого"
+    return 444;      # закрити з'єднання без відповіді
+}
+```
+
+Якщо `default_server` не вказаний явно — дефолтним стає перший server block у конфігурації для цього порту.
+
+---
+
+#### Повний приклад вибору
+
+```nginx
+# Конфіг
+server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    root /var/www/main;
+}
+
+server {
+    listen 80;
+    server_name api.example.com;
+    root /var/www/api;
+}
+
+server {
+    listen 443 ssl;
+    server_name example.com;
+    ssl_certificate /etc/ssl/certs/example.crt;
+    ssl_certificate_key /etc/ssl/private/example.key;
+}
+```
+
+```
+Запит: GET / HTTP/1.1, Host: example.com, port 80
+→ listen 80: підходять перші три blocks
+→ server_name: точний збіг example.com → другий block ✓
+
+Запит: GET /users HTTP/1.1, Host: api.example.com, port 80
+→ listen 80: підходять перші три
+→ server_name: точний збіг api.example.com → третій block ✓
+
+Запит: GET / HTTP/1.1, Host: unknown.com, port 80
+→ listen 80: підходять перші три
+→ server_name: збігів немає → default_server → перший block → 444 ✓
+
+Запит: GET / HTTP/1.1, Host: example.com, port 443
+→ listen 443: підходить тільки четвертий block → одразу він ✓
+```
+
+---
+
+#### Чому важливо мати default_server
+
+Без явного `default_server` запити з невідомим `Host` потраплять у перший server block — можливо не туди де ви очікуєте. Явний `default_server` з `return 444` або `return 400` — хороша практика для безпеки: блокує сканери і запити без коректного Host.
+
+---
+
+#### SNI і HTTPS
+
+Для HTTPS вибір server block за `server_name` відбувається ще до TLS handshake через **SNI (Server Name Indication)** — розширення TLS, де клієнт повідомляє ім'я хоста при з'єднанні. Це дозволяє Nginx подавати різні сертифікати для різних доменів на одному IP і порту.
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name example.com;
+    ssl_certificate /etc/ssl/example.crt;
+}
+
+server {
+    listen 443 ssl;
+    server_name other.com;
+    ssl_certificate /etc/ssl/other.crt;
+}
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Крок 1** — відбір за `listen` (IP:port)
+- **Крок 2** — вибір за `server_name` (Host header)
+- **Пріоритет**: точний збіг → wildcard `*` → regex `~` → default
+- **`default_server`** — куди йдуть запити без збігу; якщо не вказаний — перший block
+- **`server_name _`** — placeholder для "будь-який / нічого"
+- **SNI** — для HTTPS дозволяє різні сертифікати на одному IP
+
+</details>
+
+---
+
+<a id="17"></a>
+
+### 17. Як коректно визначити реальний IP користувача в застосунку, якщо запит проходить через Nginx, reverse proxy або load balancer? Поясніть X-Forwarded-For, X-Real-IP, trusted proxies.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Коли запит проходить через reverse proxy або load balancer, `$_SERVER['REMOTE_ADDR']` у PHP (і аналоги в інших мовах) містить IP проксі, а не реального користувача. Реальний IP передається у спеціальних headers — `X-Forwarded-For` або `X-Real-IP`. Але просто читати ці headers небезпечно: будь-який клієнт може підробити їх і вказати довільний IP. Правильне рішення — довіряти цим headers тільки від відомих trusted proxies.
+
+---
+
+#### Чому REMOTE_ADDR недостатньо
+
+```
+Користувач (1.2.3.4) → Nginx (10.0.0.1) → PHP-FPM
+
+PHP бачить:
+$_SERVER['REMOTE_ADDR'] = '10.0.0.1'  // IP Nginx, не користувача
+```
+
+Nginx знає реальний IP і може передати його через header.
+
+---
+
+#### X-Real-IP
+
+Nginx встановлює один IP — безпосередньо IP клієнта:
+
+```nginx
+location / {
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_pass http://backend;
+}
+```
+
+PHP отримує:
+```php
+$realIp = $_SERVER['HTTP_X_REAL_IP'] ?? null;
+// '1.2.3.4'
+```
+
+Простий і зручний, але не стандартний — тільки Nginx конвенція.
+
+---
+
+#### X-Forwarded-For
+
+Стандартніший header. Містить ланцюжок IP через кому — від клієнта до останнього проксі:
+
+```
+X-Forwarded-For: <client>, <proxy1>, <proxy2>
+```
+
+При проходженні через кілька проксі кожен додає свій IP в кінець:
+
+```
+Користувач (1.2.3.4)
+  → Proxy1 (10.0.0.1) → додає: X-Forwarded-For: 1.2.3.4
+  → Proxy2 (10.0.0.2) → додає: X-Forwarded-For: 1.2.3.4, 10.0.0.1
+  → App server         → бачить: X-Forwarded-For: 1.2.3.4, 10.0.0.1
+```
+
+Перший IP (лівий) — реальний клієнт. Але тільки якщо перший проксі в ланцюжку не підроблений.
+
+Nginx передає так:
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+# $proxy_add_x_forwarded_for = існуючий XFF header + $remote_addr
+```
+
+---
+
+#### Проблема підробки
+
+Клієнт може сам відправити:
+```
+X-Forwarded-For: 8.8.8.8
+```
+
+Nginx додасть свій IP:
+```
+X-Forwarded-For: 8.8.8.8, 1.2.3.4  // 8.8.8.8 — підроблений!
+```
+
+Якщо застосунок бере перший IP — він отримає підроблений `8.8.8.8`.
+
+**Правильне рішення:** враховувати тільки ту частину XFF, яку додали довірені проксі. Справжній IP — це перший IP зліва, що НЕ є trusted proxy.
+
+---
+
+#### Trusted proxies — правильний підхід
+
+Потрібно знати IP всіх своїх проксі і читати XFF зправа, пропускаючи довірені:
+
+```
+X-Forwarded-For: 8.8.8.8 (підроблений), 1.2.3.4 (реальний), 10.0.0.1 (nginx)
+Trusted proxies: [10.0.0.1]
+
+Читаємо справа: 10.0.0.1 — trusted, пропускаємо
+Наступний: 1.2.3.4 — не trusted → це реальний IP ✓
+```
+
+---
+
+#### PHP — читання вручну
+
+```php
+function getRealIp(array $trustedProxies = []): string
+{
+    $remoteAddr = $_SERVER['REMOTE_ADDR'];
+
+    // Якщо запит не від trusted proxy — одразу REMOTE_ADDR
+    if (!in_array($remoteAddr, $trustedProxies)) {
+        return $remoteAddr;
+    }
+
+    // Читаємо XFF і беремо перший не-trusted IP справа
+    $xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+    $ips = array_map('trim', array_reverse(explode(',', $xff)));
+
+    foreach ($ips as $ip) {
+        if (!in_array($ip, $trustedProxies)) {
+            return $ip;
+        }
+    }
+
+    return $remoteAddr;
+}
+
+$ip = getRealIp(['10.0.0.1', '10.0.0.2']);
+```
+
+---
+
+#### Symfony — trusted proxies вбудовані
+
+Symfony має вбудовану підтримку через `Request::setTrustedProxies()`:
+
+```php
+// public/index.php або middleware
+Request::setTrustedProxies(
+    ['10.0.0.1', '10.0.0.2', '127.0.0.1'],
+    Request::HEADER_X_FORWARDED_FOR |
+    Request::HEADER_X_FORWARDED_HOST |
+    Request::HEADER_X_FORWARDED_PORT |
+    Request::HEADER_X_FORWARDED_PROTO
+);
+```
+
+Або через `config/packages/framework.yaml`:
+```yaml
+framework:
+    trusted_proxies: '10.0.0.1,10.0.0.2'
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto']
+```
+
+Після цього `$request->getClientIp()` повертає правильний IP автоматично.
+
+---
+
+#### AWS, Cloudflare, інші CDN
+
+Якщо трафік іде через CDN або хмарний load balancer — їх IP діапазони потрібно додати до trusted proxies. Cloudflare публікує свої IP діапазони, AWS ALB — теж.
+
+Альтернатива для Cloudflare — використовувати header `CF-Connecting-IP`, який вони додають і який не може підробити клієнт (якщо трафік дійсно йде через Cloudflare).
+
+---
+
+#### Міні-шпаргалка
+
+- **`REMOTE_ADDR`** — IP проксі, не клієнта (за reverse proxy)
+- **`X-Real-IP`** — один IP клієнта, встановлений Nginx (не стандарт)
+- **`X-Forwarded-For`** — ланцюжок IP, перший — клієнт (але може бути підроблений)
+- **Trusted proxies** — читати XFF справа, пропускати відомі proxy IP
+- **Symfony** — `setTrustedProxies()` або `trusted_proxies` у конфігу
+- **Ніколи** не довіряти XFF без перевірки trusted proxies — ризик IP spoofing
 
 </details>
