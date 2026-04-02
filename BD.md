@@ -22,9 +22,25 @@
 
 8. [Які типи зв'язків між сутностями існують у реляційних базах даних? Поясніть one-to-one, one-to-many, many-to-many та способи їх реалізації на рівні таблиць.](#8)
 
-9. [Що таке первинний ключ, зовнішній ключ і в чому різниця між первинним та унікальним ключем? Поясніть їхню роль у цілісності даних, індексації та зв'язках між таблицями.](#9)
+9. [Що таке Primary Key, Foreign Key і в чому різниця між Primary та Unique Key? Поясніть їхню роль у цілісності даних, індексації та зв'язках між таблицями.](#9)
 
 10. [Що таке referential integrity і як СУБД забезпечує контроль цілісності зв'язків? Поясніть роль foreign key constraints, cascade operations та наслідки відсутності контролю цілісності.](#10)
+
+## Блок 4. SQL-запити та базові операції
+
+11. [Як будувати ефективні SQL-запити для вибірки даних? Поясніть, як реалізуються фільтрація, сортування, пагінація та вибір випадкових записів. Наведіть приклад SQL-запиту та поясніть, чому ORDER BY RAND() погано масштабується на великих таблицях і які підходи краще використовувати замість нього.](#11)
+
+12. [Які агрегатні функції існують у SQL і в яких випадках вони використовуються? Поясніть COUNT, SUM, AVG, MIN, MAX, а також роль GROUP BY і HAVING.](#12)
+
+13. [У чому різниця між WHERE і HAVING, а також між DISTINCT і GROUP BY? Поясніть, на якому етапі виконується WHERE і HAVING, коли який із них слід використовувати, а також у яких випадках DISTINCT і GROUP BY можуть давати схожий результат, а в яких вони вирішують різні задачі.](#13)
+
+14. [Які види JOIN існують у SQL, у чому між ними різниця, і чим JOIN відрізняється від UNION? Поясніть INNER JOIN, LEFT JOIN, RIGHT JOIN, CROSS JOIN, типові помилки при джойнах і різницю між горизонтальним об'єднанням таблиць через JOIN та вертикальним об'єднанням результатів через UNION.](#14)
+
+15. [У чому різниця між DISTINCT, UNION, UNION ALL, INTERSECT, EXCEPT? Поясніть, як працює кожен оператор, коли він використовується і які є особливості продуктивності.](#15)
+
+16. [Що таке збережені процедури, функції та тригери в базі даних, і коли їх доцільно або недоцільно використовувати? Поясніть плюси, мінуси, питання підтримки, portability та місце бізнес-логіки.](#16)
+
+17. [Що таке views у базі даних, які у них переваги та недоліки? Поясніть, коли views допомагають спростити доступ до даних, а коли створюють обмеження або проблеми з продуктивністю.](#17)
 
 ---
 
@@ -1410,7 +1426,7 @@ WHERE sc.student_id = 1;
 
 <a id="9"></a>
 
-### 9. Що таке первинний ключ, зовнішній ключ і в чому різниця між первинним та унікальним ключем? Поясніть їхню роль у цілісності даних, індексації та зв'язках між таблицями.
+### 9. Що таке Primary Key, Foreign Key і в чому різниця між Primary та Unique Key? Поясніть їхню роль у цілісності даних, індексації та зв'язках між таблицями.
 
 <details>
 <summary>Розкрити:</summary>
@@ -1757,5 +1773,1382 @@ WHERE TABLE_SCHEMA = 'mydb'
 - **DEFERRED** — PostgreSQL дозволяє відкласти перевірку до кінця транзакції; MySQL — ні
 - **Вимкнення FK** (`FOREIGN_KEY_CHECKS=0`) — для міграцій, але після — перевірити сиріт вручну
 - **Без FK** → orphan records, витік даних, race conditions — цілісність тільки в коді
+
+</details>
+
+---
+
+<a id="11"></a>
+
+### 11. Як будувати ефективні SQL-запити для вибірки даних? Поясніть, як реалізуються фільтрація, сортування, пагінація та вибір випадкових записів. Наведіть приклад SQL-запиту та поясніть, чому ORDER BY RAND() погано масштабується на великих таблицях і які підходи краще використовувати замість нього.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Базова вибірка будується через `SELECT … WHERE … ORDER BY … LIMIT`. Кожна з цих частин має свої підводні камені на великих обсягах: неправильні умови фільтрації ігнорують індекси, `OFFSET` для пагінації деградує зі зростанням сторінки, а `ORDER BY RAND()` сканує всю таблицю. Розуміння того як MySQL виконує запит дозволяє уникнути цих пасток.
+
+---
+
+#### Фільтрація (WHERE)
+
+```sql
+-- Базова фільтрація
+SELECT id, name, email
+FROM users
+WHERE status = 'active'
+  AND created_at >= '2024-01-01'
+  AND age BETWEEN 18 AND 35;
+
+-- ✓ Індекс використовується якщо колонки входять у відповідний індекс
+-- ✗ Функції на колонці вбивають індекс:
+WHERE YEAR(created_at) = 2024        -- ❌ full scan
+WHERE created_at >= '2024-01-01'
+  AND created_at < '2025-01-01'      -- ✓ range scan по індексу
+
+-- ✗ Implicit cast вбиває індекс:
+WHERE user_id = '42'   -- user_id INT, '42' VARCHAR → cast → no index
+WHERE user_id = 42     -- ✓
+
+-- LIKE: префіксний — індекс є, суфіксний — немає
+WHERE name LIKE 'John%'   -- ✓ index range scan
+WHERE name LIKE '%John'   -- ❌ full scan
+
+-- NULL-перевірка
+WHERE deleted_at IS NULL     -- ✓ якщо є індекс
+WHERE deleted_at IS NOT NULL -- може не використати індекс (low selectivity)
+```
+
+---
+
+#### Сортування (ORDER BY)
+
+```sql
+-- Сортування використовує індекс якщо ORDER BY колонки збігаються з індексом
+CREATE INDEX idx_created ON orders(created_at);
+SELECT * FROM orders ORDER BY created_at DESC LIMIT 20;
+-- ✓ Index scan у зворотному напрямку, без filesort
+
+-- Якщо немає індексу — MySQL виконує filesort (сортування у пам'яті або tmp файл)
+EXPLAIN SELECT * FROM orders ORDER BY amount DESC;
+-- Extra: Using filesort  ← попередження
+
+-- Composite ORDER BY — потрібен composite індекс у тому самому порядку
+CREATE INDEX idx_status_date ON orders(status, created_at);
+SELECT * FROM orders WHERE status = 'active' ORDER BY created_at DESC;
+-- ✓ використовує idx_status_date
+
+-- ✗ Різні напрямки — filesort (MySQL 8+ підтримує descending indexes)
+ORDER BY created_at ASC, amount DESC  -- потрібен (created_at ASC, amount DESC) індекс
+```
+
+---
+
+#### Пагінація
+
+**OFFSET-пагінація (проста, але повільна):**
+
+```sql
+-- Сторінка N, по 20 записів
+SELECT * FROM products
+ORDER BY id
+LIMIT 20 OFFSET 0;     -- сторінка 1
+
+SELECT * FROM products
+ORDER BY id
+LIMIT 20 OFFSET 10000; -- сторінка 501
+
+-- Проблема: MySQL читає 10020 рядків, повертає 20
+-- Чим більше OFFSET — тим повільніше: O(offset + limit)
+-- На таблиці з 1M рядків OFFSET 999980 → скан майже всієї таблиці
+```
+
+**Keyset/Cursor пагінація (ефективна):**
+
+```sql
+-- Замість OFFSET використовуємо значення останнього запису
+-- Перша сторінка:
+SELECT * FROM products
+ORDER BY id
+LIMIT 20;
+-- Остання id = 1234
+
+-- Наступна сторінка:
+SELECT * FROM products
+WHERE id > 1234          -- ← "курсор"
+ORDER BY id
+LIMIT 20;
+-- Завжди O(1) незалежно від "глибини" пагінації
+-- ✓ Використовує індекс по id
+-- ✗ Неможливо перейти на довільну сторінку
+
+-- З фільтром (треба composite індекс):
+CREATE INDEX idx_status_id ON products(status, id);
+SELECT * FROM products
+WHERE status = 'active' AND id > 1234
+ORDER BY id
+LIMIT 20;
+```
+
+**Порівняння:**
+
+| | OFFSET | Keyset (cursor) |
+|---|---|---|
+| Продуктивність | Деградує з ростом OFFSET | Стабільна O(1) |
+| Довільна сторінка | ✓ | ❌ тільки вперед/назад |
+| Нові записи | Може дублювати | Стабільний курсор |
+| Коли | Адмінки, малі таблиці | Стрічки, великі таблиці |
+
+---
+
+#### ORDER BY RAND() — чому погано
+
+```sql
+-- Наївний підхід:
+SELECT * FROM products ORDER BY RAND() LIMIT 5;
+
+-- Що відбувається всередині:
+-- 1. Full table scan — читає ВСІ рядки
+-- 2. Генерує RAND() для кожного рядка → tmp таблиця (id, rand_value)
+-- 3. Сортує tmp таблицю за rand_value → O(N log N)
+-- 4. Бере перші 5
+
+-- На таблиці 1M рядків: читає 1M, сортує 1M → секунди
+EXPLAIN SELECT * FROM products ORDER BY RAND() LIMIT 5;
+-- type: ALL (full scan), Extra: Using temporary; Using filesort
+```
+
+**Альтернативи ORDER BY RAND():**
+
+```sql
+-- 1. Метод через MAX(id) — швидко, але нерівномірно якщо є gaps
+SELECT * FROM products
+WHERE id >= FLOOR(RAND() * (SELECT MAX(id) FROM products))
+ORDER BY id
+LIMIT 1;
+-- ✓ Один index lookup замість full scan
+-- ✗ Нерівномірний розподіл якщо багато видалених id (gaps)
+
+-- 2. Метод через COUNT + OFFSET — точний, але два запити
+SET @total = (SELECT COUNT(*) FROM products);
+SET @offset = FLOOR(RAND() * @total);
+SELECT * FROM products LIMIT 1 OFFSET @offset;
+-- ✓ Рівномірний розподіл
+-- ✗ COUNT(*) + OFFSET деградує на великих таблицях
+
+-- 3. Зберігати rand-колонку (best for high-frequency):
+ALTER TABLE products ADD COLUMN sort_rand FLOAT DEFAULT (RAND());
+CREATE INDEX idx_rand ON products(sort_rand);
+
+-- Вибірка:
+SET @r = RAND();
+SELECT * FROM products
+WHERE sort_rand >= @r
+ORDER BY sort_rand
+LIMIT 5;
+-- Якщо менше 5 результатів — другий запит з sort_rand < @r
+
+-- Оновлювати sort_rand periodically (cron):
+UPDATE products SET sort_rand = RAND()
+WHERE id IN (SELECT id FROM products ORDER BY RAND() LIMIT 10000);
+
+-- 4. Для малих таблиць (< 10k рядків) — ORDER BY RAND() прийнятно
+```
+
+---
+
+#### Повний приклад ефективного запиту
+
+```sql
+-- Каталог товарів з фільтрацією, сортуванням і cursor-пагінацією
+SELECT
+    p.id,
+    p.name,
+    p.price,
+    p.stock,
+    c.name AS category_name
+FROM products p
+JOIN categories c ON p.category_id = c.id
+WHERE p.status = 'active'
+  AND p.price BETWEEN 100 AND 5000
+  AND p.category_id = 42
+  AND p.id > 1500          -- cursor від попередньої сторінки
+ORDER BY p.id ASC
+LIMIT 20;
+
+-- Потрібні індекси:
+CREATE INDEX idx_products_filter ON products(status, category_id, price, id);
+--  status=active (eq) → category_id=42 (eq) → price BETWEEN (range) → id (order)
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Фільтрація**: уникати функцій на індексованих колонках, implicit cast, суфіксний LIKE
+- **Сортування**: ORDER BY без індексу → filesort; composite індекс повинен збігатись з ORDER BY
+- **OFFSET-пагінація** → деградує; **Keyset (cursor)** → O(1), підходить для стрічок і великих таблиць
+- **ORDER BY RAND()** → full scan + filesort → катастрофа на > 10k рядків
+- **Альтернативи RAND()**: rand-колонка з індексом, `WHERE id >= RAND()*MAX(id)`, COUNT+OFFSET
+- **EXPLAIN** перед оптимізацією — перевірити `type`, `rows`, `Extra: Using filesort/temporary`
+
+</details>
+
+---
+
+<a id="12"></a>
+
+### 12. Які агрегатні функції існують у SQL і в яких випадках вони використовуються? Поясніть COUNT, SUM, AVG, MIN, MAX, а також роль GROUP BY і HAVING.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Агрегатні функції обчислюють одне значення з набору рядків. Вони завжди використовуються разом з `GROUP BY` (коли потрібна агрегація по групах) або без нього (агрегація всієї таблиці). `HAVING` фільтрує вже агреговані групи — аналог `WHERE`, але після `GROUP BY`.
+
+---
+
+#### Основні агрегатні функції
+
+```sql
+-- Таблиця для прикладів
+-- orders: id, customer_id, status, amount, created_at
+
+-- COUNT — кількість рядків
+SELECT COUNT(*)           FROM orders;              -- всі рядки включно з NULL
+SELECT COUNT(amount)      FROM orders;              -- рядки де amount IS NOT NULL
+SELECT COUNT(DISTINCT customer_id) FROM orders;    -- унікальні клієнти
+
+-- SUM — сума
+SELECT SUM(amount) FROM orders;                    -- NULL ігнорується
+SELECT SUM(amount) FROM orders WHERE status = 'delivered';
+
+-- AVG — середнє (ігнорує NULL)
+SELECT AVG(amount) FROM orders;
+-- Увага: AVG(NULL, 100, 200) = 150, не 116.67
+-- Якщо NULL = 0 логічно: AVG(COALESCE(amount, 0))
+
+-- MIN / MAX
+SELECT MIN(amount), MAX(amount) FROM orders;
+SELECT MIN(created_at), MAX(created_at) FROM orders;  -- працює і з датами
+```
+
+---
+
+#### GROUP BY
+
+Розбиває рядки на групи і застосовує агрегатну функцію до кожної групи.
+
+```sql
+-- Сума замовлень по кожному клієнту
+SELECT customer_id, SUM(amount) AS total
+FROM orders
+GROUP BY customer_id;
+
+-- Кількість і сума по статусах
+SELECT
+    status,
+    COUNT(*)        AS cnt,
+    SUM(amount)     AS revenue,
+    AVG(amount)     AS avg_order,
+    MIN(created_at) AS first_order,
+    MAX(created_at) AS last_order
+FROM orders
+GROUP BY status;
+
+-- Групування по кількох колонках
+SELECT
+    YEAR(created_at) AS yr,
+    MONTH(created_at) AS mo,
+    status,
+    COUNT(*) AS cnt
+FROM orders
+GROUP BY YEAR(created_at), MONTH(created_at), status
+ORDER BY yr, mo;
+```
+
+**Правило SELECT з GROUP BY:** кожна колонка в `SELECT` має або бути в `GROUP BY`, або загорнута в агрегатну функцію. Інакше — помилка (у strict mode) або непередбачуване значення.
+
+```sql
+-- ❌ Помилка в strict mode:
+SELECT customer_id, name, SUM(amount) FROM orders GROUP BY customer_id;
+-- name не в GROUP BY і не агрегована
+
+-- ✓ Правильно:
+SELECT customer_id, SUM(amount) FROM orders GROUP BY customer_id;
+-- або JOIN з customers щоб отримати name
+```
+
+---
+
+#### HAVING
+
+Фільтрує групи після агрегації. `WHERE` не може використовувати агрегатні функції — для цього є `HAVING`.
+
+```sql
+-- Клієнти з загальною сумою замовлень > 10 000
+SELECT customer_id, SUM(amount) AS total
+FROM orders
+GROUP BY customer_id
+HAVING total > 10000;
+
+-- WHERE vs HAVING:
+-- WHERE — фільтрує рядки ДО агрегації
+-- HAVING — фільтрує групи ПІСЛЯ агрегації
+SELECT customer_id, SUM(amount) AS total
+FROM orders
+WHERE status = 'delivered'        -- ← відкидаємо рядки до групування
+GROUP BY customer_id
+HAVING total > 10000              -- ← відкидаємо групи після
+  AND COUNT(*) >= 3;              -- ← мінімум 3 замовлення
+
+-- ❌ Так не можна — агрегат у WHERE:
+SELECT customer_id FROM orders
+WHERE SUM(amount) > 1000          -- Error: Invalid use of group function
+GROUP BY customer_id;
+```
+
+---
+
+#### Порядок виконання запиту
+
+```
+FROM → JOIN → WHERE → GROUP BY → HAVING → SELECT → DISTINCT → ORDER BY → LIMIT
+```
+
+Це пояснює чому:
+- `WHERE` не бачить псевдонімів з `SELECT` і не може використовувати агрегати
+- `HAVING` бачить псевдоніми (деякі СУБД) і може використовувати агрегати
+- `ORDER BY` бачить псевдоніми з `SELECT`
+
+```sql
+SELECT customer_id, SUM(amount) AS total
+FROM orders
+WHERE created_at >= '2024-01-01'   -- ✓ фільтр до GROUP BY
+GROUP BY customer_id
+HAVING total > 5000                -- ✓ total — псевдонім, MySQL підтримує
+ORDER BY total DESC                -- ✓ псевдонім у ORDER BY
+LIMIT 10;
+```
+
+---
+
+#### COUNT(*) vs COUNT(col) vs COUNT(DISTINCT col)
+
+```sql
+CREATE TABLE test (id INT, val INT);
+INSERT INTO test VALUES (1,10),(2,NULL),(3,10),(4,20),(5,NULL);
+
+SELECT
+    COUNT(*)           AS all_rows,    -- 5
+    COUNT(val)         AS non_null,    -- 3 (NULL не рахується)
+    COUNT(DISTINCT val) AS unique_vals  -- 2 (10 і 20)
+FROM test;
+
+-- COUNT(*) в InnoDB: повний скан (на відміну від MyISAM де зберігається)
+-- COUNT(*) з WHERE використовує індекс якщо є covering index
+```
+
+---
+
+#### GROUP_CONCAT — агрегація рядків
+
+```sql
+-- Зібрати теги продукту в один рядок
+SELECT
+    product_id,
+    GROUP_CONCAT(tag ORDER BY tag SEPARATOR ', ') AS tags
+FROM product_tags
+GROUP BY product_id;
+-- Результат: 1 | 'electronics, gadget, phone'
+
+-- Обмеження: group_concat_max_len (дефолт 1024 байти)
+SET SESSION group_concat_max_len = 100000;
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **COUNT(\*)** — всі рядки; **COUNT(col)** — non-NULL; **COUNT(DISTINCT col)** — унікальні
+- **SUM/AVG/MIN/MAX** — ігнорують NULL; AVG з NULL-як-нуль → `AVG(COALESCE(col, 0))`
+- **GROUP BY** — усі не-агреговані колонки в SELECT мають бути в GROUP BY
+- **WHERE** — до агрегації (рядки); **HAVING** — після (групи); агрегати тільки в HAVING
+- Порядок виконання: FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT
+- **GROUP_CONCAT** — збирає рядки групи в один рядок через роздільник
+
+</details>
+
+---
+
+<a id="13"></a>
+
+### 13. У чому різниця між WHERE і HAVING, а також між DISTINCT і GROUP BY? Поясніть, на якому етапі виконується WHERE і HAVING, коли який із них слід використовувати, а також у яких випадках DISTINCT і GROUP BY можуть давати схожий результат, а в яких вони вирішують різні задачі.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+`WHERE` і `HAVING` — обидва фільтрують, але на різних етапах виконання запиту. `DISTINCT` і `GROUP BY` — обидва усувають дублікати, але `GROUP BY` ще й агрегує дані. Чітке розуміння цих відмінностей дозволяє писати коректні запити і уникати непотрібних операцій.
+
+---
+
+#### WHERE vs HAVING
+
+**Порядок виконання:**
+```
+FROM → JOIN → WHERE → GROUP BY → агрегація → HAVING → SELECT → ORDER BY → LIMIT
+```
+
+```sql
+-- WHERE: фільтрує рядки ДО групування
+-- HAVING: фільтрує групи ПІСЛЯ агрегації
+
+SELECT status, COUNT(*) AS cnt, SUM(amount) AS revenue
+FROM orders
+WHERE created_at >= '2024-01-01'   -- ← відкидаємо старі рядки (до GROUP BY)
+GROUP BY status
+HAVING revenue > 50000             -- ← відкидаємо групи з малою виручкою (після)
+  AND cnt >= 10;
+```
+
+**Що де можна використовувати:**
+
+```sql
+-- ✓ WHERE: прості умови на колонках таблиці
+WHERE status = 'active'
+WHERE amount > 100
+WHERE customer_id IN (1, 2, 3)
+
+-- ❌ WHERE: агрегатні функції — помилка
+WHERE COUNT(*) > 5          -- ERROR: Invalid use of group function
+WHERE SUM(amount) > 1000    -- ERROR
+
+-- ✓ HAVING: агрегатні функції
+HAVING COUNT(*) > 5
+HAVING SUM(amount) > 1000
+HAVING AVG(amount) BETWEEN 100 AND 500
+
+-- ✓ HAVING: можна і прості умови (але краще в WHERE — ефективніше)
+HAVING status = 'active'    -- працює, але WHERE status = 'active' краще
+-- Причина: WHERE відкидає рядки до GROUP BY → менше роботи для агрегації
+```
+
+**Практичне правило:** все що можна написати у `WHERE` — пишіть у `WHERE`. `HAVING` — тільки для умов з агрегатними функціями.
+
+```sql
+-- ❌ Неефективно:
+SELECT customer_id, SUM(amount) AS total
+FROM orders
+GROUP BY customer_id
+HAVING customer_id > 100;         -- фільтр без агрегату у HAVING
+
+-- ✓ Ефективно:
+SELECT customer_id, SUM(amount) AS total
+FROM orders
+WHERE customer_id > 100            -- відкидаємо рядки до GROUP BY
+GROUP BY customer_id;
+```
+
+---
+
+#### DISTINCT vs GROUP BY
+
+**Коли дають однаковий результат:**
+
+```sql
+-- Отримати унікальні міста клієнтів
+SELECT DISTINCT city FROM customers ORDER BY city;
+
+-- Те саме через GROUP BY:
+SELECT city FROM customers GROUP BY city ORDER BY city;
+
+-- Результат ідентичний. MySQL може навіть виконати однаково.
+```
+
+**Коли GROUP BY потрібен (агрегація):**
+
+```sql
+-- DISTINCT тут не підходить — потрібно підрахувати
+SELECT city, COUNT(*) AS customer_count
+FROM customers
+GROUP BY city
+ORDER BY customer_count DESC;
+
+-- DISTINCT не може цього:
+SELECT DISTINCT city, COUNT(*) ...  -- ❌ не має сенсу
+```
+
+**Коли DISTINCT зручніший (без агрегації):**
+
+```sql
+-- Унікальні пари значень
+SELECT DISTINCT category_id, status FROM products;
+-- vs GROUP BY:
+SELECT category_id, status FROM products GROUP BY category_id, status;
+-- Результат однаковий, DISTINCT читабельніший
+
+-- DISTINCT у агрегатній функції:
+SELECT COUNT(DISTINCT customer_id) FROM orders;  -- кількість унікальних клієнтів
+-- GROUP BY тут не допоможе так само лаконічно
+
+-- DISTINCT з кількома колонками — усуває дублікати по комбінації:
+SELECT DISTINCT first_name, last_name FROM users;
+-- НЕ "унікальні first_name і унікальні last_name окремо"
+-- А "унікальні комбінації (first_name, last_name)"
+```
+
+**Продуктивність:**
+
+```sql
+-- На практиці MySQL часто виконує DISTINCT через GROUP BY внутрішньо
+-- Різниця мінімальна для простих запитів
+
+-- Але GROUP BY може використати індекс для сортування,
+-- уникаючи додаткового filesort:
+-- ✓ GROUP BY id  →  використовує clustered index, без сортування
+-- DISTINCT id    →  може потребувати sorting step
+
+-- GROUP BY з ROLLUP (підсумки) — DISTINCT так не може:
+SELECT status, COUNT(*) AS cnt
+FROM orders
+GROUP BY status WITH ROLLUP;
+-- Додає рядок з загальним COUNT для всіх статусів
+```
+
+---
+
+#### Порівняльна таблиця
+
+| | WHERE | HAVING |
+|---|---|---|
+| Коли виконується | До GROUP BY | Після GROUP BY |
+| Фільтрує | Рядки | Групи |
+| Агрегатні функції | ❌ | ✓ |
+| Продуктивність | Краще (скорочує вхід для GROUP BY) | Після агрегації |
+
+| | DISTINCT | GROUP BY |
+|---|---|---|
+| Основна мета | Усунути дублікати | Агрегація по групах |
+| Агрегатні функції | Тільки `COUNT(DISTINCT col)` | ✓ будь-які |
+| Коли однаковий результат | Без агрегатів, ті самі колонки | — |
+| Додаткові можливості | — | ROLLUP, CUBE, агрегати |
+
+---
+
+#### Міні-шпаргалка
+
+- **WHERE** — до GROUP BY, фільтр рядків, агрегатні функції заборонені
+- **HAVING** — після GROUP BY, фільтр груп, агрегатні функції дозволені
+- Умови без агрегатів → завжди у WHERE (ефективніше)
+- **DISTINCT** ≈ **GROUP BY** без агрегатів — читабельніший для простих випадків
+- **GROUP BY** потрібен коли є агрегатні функції (COUNT, SUM, AVG...)
+- `COUNT(DISTINCT col)` — унікальна комбінація DISTINCT всередині агрегату
+
+</details>
+
+---
+
+<a id="14"></a>
+
+### 14. Які види JOIN існують у SQL, у чому між ними різниця, і чим JOIN відрізняється від UNION? Поясніть INNER JOIN, LEFT JOIN, RIGHT JOIN, CROSS JOIN, типові помилки при джойнах і різницю між горизонтальним об'єднанням таблиць через JOIN та вертикальним об'єднанням результатів через UNION.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+`JOIN` — горизонтальне об'єднання: додає колонки з іншої таблиці до кожного рядка. `UNION` — вертикальне: додає рядки з іншого запиту до результату. Різні типи JOIN визначають, що робити з рядками, для яких не знайдено відповідника.
+
+---
+
+#### INNER JOIN
+
+Повертає тільки рядки, для яких є відповідник в обох таблицях.
+
+```sql
+SELECT o.id, o.amount, c.name
+FROM orders o
+INNER JOIN customers c ON o.customer_id = c.id;
+-- Замовлення без клієнта → не потрапляють у результат
+-- Клієнти без замовлень → не потрапляють у результат
+
+-- JOIN без INNER — те саме (INNER за замовчуванням)
+FROM orders o JOIN customers c ON o.customer_id = c.id;
+```
+
+```
+orders:     customers:      результат INNER JOIN:
+o_id  c_id  c_id  name      o_id  name
+1     1     1     Alice  →  1     Alice
+2     2     2     Bob    →  2     Bob
+3     99    3     Carol     (3 відсутній — c_id=99 не існує)
+```
+
+---
+
+#### LEFT JOIN (LEFT OUTER JOIN)
+
+Повертає всі рядки лівої таблиці. Якщо відповідника в правій немає — колонки правої = NULL.
+
+```sql
+SELECT o.id, o.amount, c.name
+FROM orders o
+LEFT JOIN customers c ON o.customer_id = c.id;
+-- Всі замовлення, навіть ті де customer_id не знайдено в customers
+
+-- Знайти "сирітські" записи (orphan rows):
+SELECT o.id FROM orders o
+LEFT JOIN customers c ON o.customer_id = c.id
+WHERE c.id IS NULL;   -- замовлення без клієнта
+```
+
+```
+orders:     customers:      результат LEFT JOIN:
+o_id  c_id  c_id  name      o_id  name
+1     1     1     Alice  →  1     Alice
+2     2     2     Bob    →  2     Bob
+3     99    3     Carol  →  3     NULL   ← клієнта немає, але рядок є
+```
+
+---
+
+#### RIGHT JOIN (RIGHT OUTER JOIN)
+
+Повертає всі рядки правої таблиці. Якщо відповідника в лівій немає — колонки лівої = NULL.
+
+```sql
+SELECT o.id, c.name
+FROM orders o
+RIGHT JOIN customers c ON o.customer_id = c.id;
+-- Всі клієнти, навіть ті хто ще не робив замовлень
+
+-- На практиці RIGHT JOIN використовується рідко —
+-- зазвичай переписують як LEFT JOIN з переставленими таблицями:
+SELECT o.id, c.name
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id;  -- еквівалентно
+```
+
+---
+
+#### FULL OUTER JOIN
+
+Всі рядки з обох таблиць. Де немає відповідника — NULL. MySQL не підтримує напряму.
+
+```sql
+-- PostgreSQL / MSSQL:
+SELECT o.id, c.name
+FROM orders o
+FULL OUTER JOIN customers c ON o.customer_id = c.id;
+
+-- MySQL — емуляція через UNION:
+SELECT o.id, c.name FROM orders o LEFT  JOIN customers c ON o.customer_id = c.id
+UNION
+SELECT o.id, c.name FROM orders o RIGHT JOIN customers c ON o.customer_id = c.id;
+```
+
+---
+
+#### CROSS JOIN
+
+Декартів добуток: кожен рядок лівої × кожен рядок правої. Без умови ON.
+
+```sql
+-- Всі комбінації розмірів і кольорів
+SELECT s.size, c.color
+FROM sizes s
+CROSS JOIN colors c;
+-- 5 розмірів × 4 кольори = 20 рядків
+
+-- Небезпека: CROSS JOIN великих таблиць = мільярди рядків
+-- 1000 × 1000 = 1 000 000 рядків
+```
+
+---
+
+#### SELF JOIN
+
+Таблиця джойниться сама з собою. Потрібні псевдоніми.
+
+```sql
+-- Знайти менеджера кожного співробітника
+SELECT e.name AS employee, m.name AS manager
+FROM employees e
+LEFT JOIN employees m ON e.manager_id = m.id;
+```
+
+---
+
+#### Типові помилки при JOIN
+
+```sql
+-- 1. Відсутня умова ON → неявний CROSS JOIN (MySQL дозволяє)
+SELECT * FROM orders, customers;   -- ❌ Декартів добуток!
+SELECT * FROM orders JOIN customers;  -- ❌ Error в strict SQL
+
+-- 2. Дублювання рядків через 1:N зв'язок
+-- orders має кілька order_items — JOIN множить рядки:
+SELECT o.id, SUM(oi.price) FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+-- Якщо потім GROUP BY не зробити — отримаєте дублікати
+
+-- 3. NULL у JOIN-колонці — рядок не знайде пару
+-- customer_id IS NULL → LEFT JOIN поверне рядок, INNER JOIN — ні
+
+-- 4. Неоднозначна колонка (ambiguous column)
+SELECT id FROM orders JOIN customers ...
+-- ERROR: Column 'id' in field list is ambiguous
+SELECT orders.id FROM orders JOIN customers ...  -- ✓
+
+-- 5. Забутий індекс на FK — повільний JOIN
+-- Завжди перевіряти EXPLAIN: type=ALL на великій таблиці → немає індексу
+```
+
+---
+
+#### JOIN vs UNION
+
+| | JOIN | UNION |
+|---|---|---|
+| Напрямок | Горизонтальний (колонки) | Вертикальний (рядки) |
+| Умова | ON / USING | Однакова кількість і типи колонок |
+| Дублікати | Залишає | UNION прибирає; UNION ALL залишає |
+| Мета | Збагатити рядки даними з іншої таблиці | Об'єднати результати кількох запитів |
+
+```sql
+-- JOIN: додаємо колонки (ширший результат)
+SELECT o.id, o.amount, c.name, c.email
+FROM orders o JOIN customers c ON o.customer_id = c.id;
+-- Результат: id | amount | name | email
+
+-- UNION: додаємо рядки (довший результат)
+SELECT id, name, 'customer' AS type FROM customers
+UNION
+SELECT id, title, 'product' AS type FROM products;
+-- Результат: id | name | type (рядки з обох таблиць разом)
+
+-- UNION видаляє дублікати (як DISTINCT) → повільніше
+-- UNION ALL залишає дублікати → швидше, якщо дублікати не важливі
+SELECT email FROM customers
+UNION ALL                        -- ✓ швидше якщо точно немає дублікатів
+SELECT email FROM newsletter_subscribers;
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **INNER JOIN** — тільки рядки з відповідником в обох таблицях
+- **LEFT JOIN** — всі рядки лівої + NULL для тих що не знайшли пару; пошук orphan: `WHERE right.id IS NULL`
+- **RIGHT JOIN** — всі рядки правої; зазвичай замінюють на LEFT JOIN із переставленими таблицями
+- **CROSS JOIN** — декартів добуток, без ON; обережно з великими таблицями
+- **FULL OUTER JOIN** — всі рядки обох; MySQL не підтримує → емуляція через UNION
+- **JOIN vs UNION**: JOIN розширює горизонтально (колонки), UNION — вертикально (рядки)
+- **UNION** прибирає дублікати (дорого); **UNION ALL** — залишає (швидко)
+
+</details>
+
+---
+
+<a id="15"></a>
+
+### 15. У чому різниця між DISTINCT, UNION, UNION ALL, INTERSECT, EXCEPT? Поясніть, як працює кожен оператор, коли він використовується і які є особливості продуктивності.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Всі п'ять операторів так чи інакше пов'язані з унікальністю або комбінуванням наборів рядків. `DISTINCT` — усуває дублікати в межах одного запиту. `UNION`/`UNION ALL` — об'єднують рядки з двох запитів вертикально. `INTERSECT` — залишає тільки спільні рядки. `EXCEPT` (`MINUS`) — залишає рядки що є в першому запиті, але відсутні в другому.
+
+---
+
+#### DISTINCT
+
+Усуває повністю однакові рядки з результату одного SELECT.
+
+```sql
+-- Унікальні міста клієнтів
+SELECT DISTINCT city FROM customers;
+
+-- Унікальні комбінації колонок (не кожна окремо)
+SELECT DISTINCT city, country FROM customers;
+-- Повертає унікальні пари (city, country), не унікальні міста окремо
+
+-- DISTINCT у агрегаті
+SELECT COUNT(DISTINCT customer_id) FROM orders;  -- кількість унікальних клієнтів
+SELECT SUM(DISTINCT amount) FROM orders;          -- сума унікальних сум (рідко потрібно)
+
+-- Продуктивність: MySQL будує hash або сортує для знаходження дублікатів
+-- Без індексу → filesort або tmp table
+-- З індексом по колонці → index scan без додаткового сортування
+```
+
+---
+
+#### UNION
+
+Об'єднує рядки двох SELECT вертикально і **видаляє дублікати** (як DISTINCT по всьому результату).
+
+```sql
+-- Всі email-адреси: і клієнтів, і постачальників
+SELECT email FROM customers
+UNION
+SELECT email FROM suppliers;
+-- Якщо один email є в обох таблицях → з'явиться один раз
+
+-- Вимоги:
+-- 1. Однакова кількість колонок в обох SELECT
+-- 2. Сумісні типи даних (MySQL конвертує автоматично)
+-- 3. Назви колонок — з першого SELECT
+
+-- Типовий use case: звіт з кількох джерел
+SELECT id, name, 'active'   AS source FROM active_users
+UNION
+SELECT id, name, 'archived' AS source FROM archived_users;
+```
+
+**Як видаляє дублікати:** MySQL виконує сортування або хешування всього результату — `O(N log N)` або `O(N)` пам'яті. На великих результатах — дорого.
+
+---
+
+#### UNION ALL
+
+Те саме що UNION, але **зберігає всі рядки включно з дублікатами**.
+
+```sql
+SELECT email FROM customers
+UNION ALL
+SELECT email FROM newsletter_subscribers;
+-- Якщо один email є в обох → з'явиться двічі
+
+-- Завжди швидший за UNION: просто конкатенує результати без перевірки
+-- Використовуйте UNION ALL якщо:
+-- 1. Точно немає дублікатів (різні таблиці без перетину)
+-- 2. Дублікати не важливі для задачі
+-- 3. Потрібен COUNT всіх рядків (включно з повторами)
+
+-- Поширений патерн: логи з кількох джерел
+SELECT created_at, 'login'  AS event, user_id FROM login_events
+UNION ALL
+SELECT created_at, 'purchase', user_id FROM purchase_events
+UNION ALL
+SELECT created_at, 'logout',   user_id FROM logout_events
+ORDER BY created_at;
+```
+
+---
+
+#### INTERSECT
+
+Повертає тільки рядки, які є **в обох** запитах. Аналог перетину множин.
+
+```sql
+-- MySQL 8.0.31+ підтримує INTERSECT
+-- PostgreSQL, MSSQL, Oracle — підтримують давно
+
+-- Клієнти що одночасно є підписниками розсилки
+SELECT email FROM customers
+INTERSECT
+SELECT email FROM newsletter_subscribers;
+
+-- MySQL < 8.0.31: емуляція через INNER JOIN або IN
+SELECT DISTINCT c.email
+FROM customers c
+WHERE c.email IN (SELECT email FROM newsletter_subscribers);
+-- або
+SELECT DISTINCT c.email
+FROM customers c
+INNER JOIN newsletter_subscribers ns ON c.email = ns.email;
+```
+
+---
+
+#### EXCEPT (MINUS)
+
+Повертає рядки з першого запиту, яких **немає** в другому. Аналог різниці множин.
+
+```sql
+-- MySQL 8.0.31+ підтримує EXCEPT
+-- Oracle використовує MINUS замість EXCEPT
+
+-- Клієнти що ще жодного разу не робили замовлення
+SELECT id FROM customers
+EXCEPT
+SELECT DISTINCT customer_id FROM orders;
+
+-- MySQL < 8.0.31: емуляція через LEFT JOIN або NOT IN / NOT EXISTS
+SELECT c.id FROM customers c
+LEFT JOIN orders o ON c.id = o.customer_id
+WHERE o.id IS NULL;
+
+-- або через NOT EXISTS (часто ефективніше NOT IN на великих таблицях):
+SELECT c.id FROM customers c
+WHERE NOT EXISTS (
+    SELECT 1 FROM orders o WHERE o.customer_id = c.id
+);
+```
+
+---
+
+#### Продуктивність
+
+| Оператор | Видаляє дублікати | Механізм | Відносна вартість |
+|---|---|---|---|
+| DISTINCT | ✓ | Sort або Hash | Середня |
+| UNION | ✓ | Sort або Hash всього результату | Висока |
+| UNION ALL | ✗ | Просте об'єднання | Низька |
+| INTERSECT | ✓ | Hash join / Sort merge | Середня |
+| EXCEPT | ✓ | Hash / Sort + diff | Середня |
+
+```sql
+-- Завжди віддавайте перевагу UNION ALL якщо дублікати не важливі:
+-- UNION:     читає 1M + 1M рядків, сортує 2M → повільно
+-- UNION ALL: читає 1M + 1M, конкатенує → швидко
+
+-- INTERSECT vs INNER JOIN: зазвичай JOIN ефективніший якщо є індекси
+-- EXCEPT vs NOT EXISTS: NOT EXISTS часто ефективніший NOT IN (не проблема з NULL)
+```
+
+---
+
+#### Порівняльна таблиця
+
+| Оператор | Що повертає | Дублікати | MySQL підтримка |
+|---|---|---|---|
+| DISTINCT | Унікальні рядки одного SELECT | Прибирає | ✓ завжди |
+| UNION | Рядки A + рядки B | Прибирає | ✓ завжди |
+| UNION ALL | Рядки A + рядки B | Зберігає | ✓ завжди |
+| INTERSECT | Рядки що є і в A і в B | Прибирає | ✓ з 8.0.31 |
+| EXCEPT | Рядки A яких немає в B | Прибирає | ✓ з 8.0.31 |
+
+---
+
+#### Міні-шпаргалка
+
+- **DISTINCT** — унікальні рядки в межах одного SELECT; `COUNT(DISTINCT col)` — у агрегатах
+- **UNION** — вертикальне об'єднання + дедуплікація; вимагає однакову кількість колонок
+- **UNION ALL** — те саме без дедуплікації → завжди швидший; використовувати за замовчуванням
+- **INTERSECT** — перетин (є в обох); MySQL < 8.0.31 → `INNER JOIN` або `IN (subquery)`
+- **EXCEPT** — різниця (є в A, нема в B); MySQL < 8.0.31 → `LEFT JOIN … WHERE IS NULL` або `NOT EXISTS`
+- `NOT EXISTS` ефективніший `NOT IN` коли в підзапиті можуть бути NULL
+
+</details>
+
+---
+
+<a id="16"></a>
+
+### 16. Що таке збережені процедури, функції та тригери в базі даних, і коли їх доцільно або недоцільно використовувати? Поясніть плюси, мінуси, питання підтримки, portability та місце бізнес-логіки.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Stored procedures, functions і triggers — це SQL-код що зберігається і виконується безпосередньо в СУБД. Вони зменшують трафік між застосунком і БД, але ускладнюють підтримку, версіонування і переносимість. Головна дискусія: де має жити бізнес-логіка — в БД чи в застосунку.
+
+---
+
+#### Збережена процедура (Stored Procedure)
+
+Набір SQL-інструкцій що зберігається на сервері і викликається по імені. Може мати вхідні/вихідні параметри, цикли, умови, транзакції.
+
+```sql
+DELIMITER $$
+
+CREATE PROCEDURE transfer_funds(
+    IN  from_account INT,
+    IN  to_account   INT,
+    IN  amount       DECIMAL(10,2),
+    OUT result       VARCHAR(50)
+)
+BEGIN
+    DECLARE balance DECIMAL(10,2);
+
+    START TRANSACTION;
+
+    SELECT balance INTO balance FROM accounts WHERE id = from_account FOR UPDATE;
+
+    IF balance < amount THEN
+        ROLLBACK;
+        SET result = 'insufficient_funds';
+    ELSE
+        UPDATE accounts SET balance = balance - amount WHERE id = from_account;
+        UPDATE accounts SET balance = balance + amount WHERE id = to_account;
+        COMMIT;
+        SET result = 'success';
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- Виклик:
+CALL transfer_funds(1, 2, 500.00, @result);
+SELECT @result;
+```
+
+**Переваги:**
+- Виконання на стороні сервера → мінімум трафіку між app і БД
+- Атомарна транзакція у кількох запитах
+- Можна давати права на EXECUTE без доступу до таблиць напряму
+- Попередня компіляція (query plan кешується)
+
+---
+
+#### Функція (Stored Function)
+
+Повертає єдине значення і може використовуватись у SQL-виразах (у SELECT, WHERE). На відміну від процедури — не може змінювати стан БД (у стандарті; MySQL дозволяє, але не рекомендується).
+
+```sql
+DELIMITER $$
+
+CREATE FUNCTION full_name(first VARCHAR(50), last VARCHAR(50))
+RETURNS VARCHAR(101)
+DETERMINISTIC
+BEGIN
+    RETURN CONCAT(first, ' ', last);
+END$$
+
+DELIMITER ;
+
+-- Використання у запиті:
+SELECT full_name(first_name, last_name) AS name FROM users;
+SELECT * FROM users WHERE full_name(first_name, last_name) = 'John Doe';
+
+-- Ще приклад: вік по даті народження
+CREATE FUNCTION age_years(birth_date DATE)
+RETURNS INT
+DETERMINISTIC
+RETURN TIMESTAMPDIFF(YEAR, birth_date, CURDATE());
+
+SELECT name, age_years(birth_date) AS age FROM users WHERE age_years(birth_date) >= 18;
+-- Увага: функція у WHERE → full scan (не використовує індекс по birth_date)
+```
+
+**DETERMINISTIC:** одні й ті самі аргументи завжди повертають один і той самий результат — важливо для реплікації і кешування.
+
+---
+
+#### Тригер (Trigger)
+
+Автоматично виконується при INSERT, UPDATE або DELETE на таблиці. `BEFORE` — до операції (можна змінити дані), `AFTER` — після.
+
+```sql
+-- Аудит: логувати зміни зарплати
+CREATE TRIGGER salary_audit
+AFTER UPDATE ON employees
+FOR EACH ROW
+BEGIN
+    IF OLD.salary <> NEW.salary THEN
+        INSERT INTO salary_log (employee_id, old_salary, new_salary, changed_at)
+        VALUES (OLD.id, OLD.salary, NEW.salary, NOW());
+    END IF;
+END;
+
+-- Денормалізований лічильник: оновлювати кількість коментарів
+CREATE TRIGGER inc_comments_count
+AFTER INSERT ON comments
+FOR EACH ROW
+UPDATE posts SET comments_count = comments_count + 1 WHERE id = NEW.post_id;
+
+CREATE TRIGGER dec_comments_count
+AFTER DELETE ON comments
+FOR EACH ROW
+UPDATE posts SET comments_count = comments_count - 1 WHERE id = OLD.post_id;
+
+-- BEFORE: валідація або нормалізація перед записом
+CREATE TRIGGER normalize_email
+BEFORE INSERT ON users
+FOR EACH ROW
+SET NEW.email = LOWER(TRIM(NEW.email));
+```
+
+**Обмеження тригерів у MySQL:**
+- Не можна викликати CALL stored procedure з тригера (обмежено)
+- Не можна робити COMMIT/ROLLBACK всередині тригера
+- Тригер не бачить змін зроблених іншим тригером на тій самій таблиці
+- Складно дебажити — виконується "невидимо" для застосунку
+
+---
+
+#### Плюси і мінуси
+
+| | Переваги | Недоліки |
+|---|---|---|
+| **Stored Procedure** | Менше трафіку, атомарні операції, права без доступу до таблиць | Важко дебажити, немає unit-тестів, прив'язка до СУБД |
+| **Function** | Можна в SELECT/WHERE, читабельно | Full scan якщо в WHERE на індексованій колонці |
+| **Trigger** | Автоматичний, непропустимий | Прихована логіка, важко налагодити, overhead на кожен запис |
+
+---
+
+#### Portability
+
+```
+MySQL stored procedures ≠ PostgreSQL PL/pgSQL ≠ Oracle PL/SQL ≠ MSSQL T-SQL
+
+Переписати процедуру з MySQL на PostgreSQL — майже повний рерайт:
+- Синтаксис відмінний
+- Типи даних відрізняються
+- Обробка помилок інша
+- MySQL: DELIMITER $$; PostgreSQL: $$ … $$ LANGUAGE plpgsql
+
+Висновок: логіка в stored procedures → сильна прив'язка до конкретної СУБД
+```
+
+---
+
+#### Де має жити бізнес-логіка?
+
+**Аргументи "логіка в БД" (процедури/тригери):**
+- Консистентність: будь-який клієнт (PHP, Python, мобільний) отримає ті самі правила
+- Продуктивність: менше round-trips, логіка поруч з даними
+- Безпека: можна дати права на EXECUTE, а не на таблиці
+
+**Аргументи "логіка в застосунку":**
+- Версіонування: код у Git, code review, CI/CD — а не в БД
+- Тестування: unit-тести, моки — легко
+- Дебагінг: логи, breakpoints, profiler
+- Масштабування: app-сервери горизонтально масштабуються, БД — ні
+- Портабельність: зміна СУБД не потребує переписувати логіку
+
+**Консенсус у сучасних командах:**
+```
+✓ БД: constraints (FK, UNIQUE, CHECK), аудит-тригери, прості денормалізовані лічильники
+✓ Застосунок: вся бізнес-логіка, валідація, обчислення, workflow
+
+Stored procedures — виправдані для:
+  - Batch-операцій з мільйонами рядків (ETL, звіти)
+  - Legacy систем де БД — єдина точка інтеграції для кількох застосунків
+  - Фінансових транзакцій де критична атомарність і мінімум network hops
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Stored Procedure** — SQL-програма на сервері; плюс: продуктивність, атомарність; мінус: важко тестувати, vendor lock-in
+- **Function** — повертає значення, використовується в SELECT/WHERE; у WHERE на індексі → full scan
+- **Trigger** — автоматично при DML; корисний для аудиту і лічильників; мінус: прихована логіка, складний дебаг
+- **Portability**: синтаксис процедур унікальний для кожної СУБД → сильна прив'язка
+- **Бізнес-логіка в застосунку** — сучасний консенсус; БД — тільки constraints і прості тригери
+- **Виняток**: ETL, batch-обробка мільйонів рядків, legacy multi-client системи
+
+</details>
+
+---
+
+<a id="17"></a>
+
+### 17. Що таке views у базі даних, які у них переваги та недоліки? Поясніть, коли views допомагають спростити доступ до даних, а коли створюють обмеження або проблеми з продуктивністю.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+**View** — іменований збережений SELECT-запит. При зверненні до view MySQL виконує базовий запит наново — view не зберігає дані (якщо це не materialized view). Це інструмент абстракції: спрощує складні запити, контролює доступ до даних, але не дає автоматичного приросту продуктивності.
+
+---
+
+#### Створення та використання
+
+```sql
+-- Базовий view: активні користувачі з їх роллю
+CREATE VIEW active_users AS
+SELECT u.id, u.name, u.email, r.name AS role
+FROM users u
+JOIN roles r ON u.role_id = r.id
+WHERE u.deleted_at IS NULL
+  AND u.is_active = 1;
+
+-- Використання як звичайна таблиця:
+SELECT * FROM active_users WHERE role = 'admin';
+SELECT COUNT(*) FROM active_users;
+
+-- Оновлення view:
+CREATE OR REPLACE VIEW active_users AS
+SELECT u.id, u.name, u.email, u.created_at, r.name AS role ...;
+
+-- Видалення:
+DROP VIEW IF EXISTS active_users;
+
+-- Переглянути визначення:
+SHOW CREATE VIEW active_users;
+```
+
+---
+
+#### Переваги views
+
+**1. Спрощення складних запитів**
+```sql
+-- Без view: кожен раз писати складний JOIN
+SELECT o.id, o.created_at, c.name, c.email,
+       SUM(oi.price * oi.qty) AS total,
+       COUNT(oi.id) AS items_count
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+JOIN order_items oi ON oi.order_id = o.id
+WHERE o.status = 'delivered'
+GROUP BY o.id, o.created_at, c.name, c.email;
+
+-- З view:
+CREATE VIEW delivered_order_summary AS
+SELECT o.id, o.created_at, c.name, c.email,
+       SUM(oi.price * oi.qty) AS total,
+       COUNT(oi.id) AS items_count
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+JOIN order_items oi ON oi.order_id = o.id
+WHERE o.status = 'delivered'
+GROUP BY o.id, o.created_at, c.name, c.email;
+
+-- Тепер просто:
+SELECT * FROM delivered_order_summary WHERE total > 1000;
+```
+
+**2. Контроль доступу (security layer)**
+```sql
+-- Давати доступ до view, а не до таблиці напряму
+CREATE VIEW public_users AS
+SELECT id, name, avatar_url FROM users;
+-- Приховуємо: password_hash, email, phone, internal_notes
+
+GRANT SELECT ON public_users TO 'readonly_user'@'%';
+-- readonly_user не бачить таблицю users, тільки view
+```
+
+**3. Зворотна сумісність при рефакторингу**
+```sql
+-- Перейменували таблицю users → accounts, але код використовує users
+CREATE VIEW users AS SELECT * FROM accounts;
+-- Старий код не потребує змін
+```
+
+---
+
+#### Недоліки та обмеження
+
+**1. Немає кешування — view виконується щоразу заново**
+```sql
+-- Кожен SELECT до view = повне виконання базового запиту
+SELECT * FROM delivered_order_summary;
+-- MySQL виконує: весь JOIN + GROUP BY + WHERE кожен раз
+
+-- Якщо базовий запит важкий і view викликається часто → проблема
+-- View НЕ є кешем
+```
+
+**2. Обмежена оновлюваність**
+```sql
+-- Simple view (без JOIN, GROUP BY, DISTINCT, subquery) — можна оновлювати:
+CREATE VIEW active_users_simple AS
+SELECT id, name, email FROM users WHERE is_active = 1;
+
+INSERT INTO active_users_simple (name, email) VALUES ('Bob', 'bob@test.com');  -- ✓
+UPDATE active_users_simple SET name = 'Alice' WHERE id = 1;  -- ✓
+
+-- Complex view (з JOIN, GROUP BY тощо) — НЕ можна оновлювати:
+UPDATE delivered_order_summary SET total = 999;
+-- ERROR: The target table is not updatable
+```
+
+**3. Вкладені views — деградація продуктивності**
+```sql
+-- view_c базується на view_b, яке базується на view_a
+-- MySQL розгортає кожен view → один величезний запит
+-- Оптимізатор погано справляється з такими конструкціями
+
+-- Замість вкладених views — краще CTE або підзапити
+WITH base AS (SELECT ... FROM orders WHERE ...),
+     summary AS (SELECT ... FROM base JOIN ...)
+SELECT * FROM summary;
+```
+
+**4. Складність відлагодження**
+```sql
+-- Помилка у запиті до view — складно зрозуміти де проблема
+SELECT * FROM v_order_report WHERE region = 'UA';
+-- EXPLAIN покаже розгорнутий запит, але читати важко
+
+-- Перевірити план виконання:
+EXPLAIN SELECT * FROM active_users WHERE role = 'admin';
+-- MySQL показує базові таблиці, не view
+```
+
+---
+
+#### View vs Materialized View
+
+MySQL не має materialized views нативно (є в PostgreSQL, Oracle).
+
+```sql
+-- PostgreSQL Materialized View: зберігає результат фізично
+CREATE MATERIALIZED VIEW monthly_sales AS
+SELECT DATE_TRUNC('month', created_at) AS month,
+       SUM(amount) AS revenue
+FROM orders GROUP BY 1;
+
+REFRESH MATERIALIZED VIEW monthly_sales;  -- оновити вручну або за розкладом
+-- ✓ Швидке читання (дані на диску)
+-- ✗ Дані можуть бути застарілими до наступного REFRESH
+
+-- MySQL емуляція: звичайна таблиця + cron/event для оновлення
+CREATE TABLE monthly_sales_cache AS
+SELECT YEAR(created_at) AS yr, MONTH(created_at) AS mo, SUM(amount) AS revenue
+FROM orders GROUP BY 1, 2;
+
+-- MySQL Events Scheduler для оновлення:
+CREATE EVENT refresh_monthly_sales
+ON SCHEDULE EVERY 1 HOUR
+DO
+    REPLACE INTO monthly_sales_cache
+    SELECT YEAR(created_at), MONTH(created_at), SUM(amount)
+    FROM orders GROUP BY 1, 2;
+```
+
+---
+
+#### Порівняння: View vs CTE vs Subquery vs Materialized View
+
+| | View | CTE | Subquery | Materialized View |
+|---|---|---|---|---|
+| Зберігається | Тільки запит | Ні (scope запиту) | Ні | Дані на диску |
+| Повторне використання | ✓ | В межах запиту | ✗ | ✓ |
+| Продуктивність | Виконується щоразу | Виконується щоразу | Виконується щоразу | Швидке читання |
+| Оновлення | REPLACE VIEW | — | — | REFRESH |
+| MySQL підтримка | ✓ | ✓ (8.0+) | ✓ | ❌ нативно |
+
+---
+
+#### Коли використовувати view
+
+✓ **Доцільно:**
+- Спрощення складних запитів що повторюються в багатьох місцях
+- Row-level security / приховування чутливих колонок
+- Зворотна сумісність при зміні схеми
+- Звітні views для аналітичних інструментів (Metabase, Grafana)
+
+✗ **Недоцільно:**
+- Як замінник кешу — view не кешує дані
+- Вкладені views (view on view) — деградація оптимізатора
+- Там де потрібні DML операції через view зі складним запитом
+- Замість materialized view де потрібні актуальні агреговані дані з хорошою продуктивністю
+
+---
+
+#### Міні-шпаргалка
+
+- **View** — збережений SELECT, дані не зберігаються, виконується щоразу заново
+- **Переваги**: спрощення запитів, security layer, зворотна сумісність
+- **Простий view** (без JOIN/GROUP BY) — оновлюваний; складний — ні
+- **Вкладені views** → оптимізатор деградує → краще CTE
+- **MySQL не має materialized view** → емуляція таблицею + Event Scheduler
+- **View ≠ кеш** — якщо потрібна продуктивність, використовуй materialized view або кеш у Redis
 
 </details>
