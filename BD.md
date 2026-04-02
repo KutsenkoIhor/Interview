@@ -42,6 +42,16 @@
 
 17. [Що таке views у базі даних, які у них переваги та недоліки? Поясніть, коли views допомагають спростити доступ до даних, а коли створюють обмеження або проблеми з продуктивністю.](#17)
 
+## Блок 5. Індекси та оптимізація запитів
+
+18. [Які типи індексів існують у реляційних базах даних і як вони працюють? Поясніть B-Tree, Hash, Fulltext, Composite Index, а також кластерні та некластерні індекси.](#18)
+
+19. [Як правильно проєктувати індекси і які типові помилки можуть погіршити продуктивність? Поясніть селективність, порядок полів у composite index, покриття індексом, over-indexing та вплив індексів на INSERT/UPDATE/DELETE.](#19)
+
+20. [Як аналізувати та оптимізувати повільні SQL-запити? Поясніть, що таке план виконання запиту, як використовувати EXPLAIN, на що дивитися при аналізі (type, key, rows, Extra, filesort, temporary, full scan), як виявляти проблеми з індексами та JOIN, і чи може порядок JOIN впливати на продуктивність.](#20)
+
+21. [Які загальні підходи до оптимізації продуктивності бази даних ви використовуєте на практиці? Поясніть роботу з індексами, профілювання запитів, денормалізацію, кешування, партиціювання, read/write split та архітектурні підходи.](#21)
+
 ---
 
 <a id="1"></a>
@@ -3150,5 +3160,956 @@ DO
 - **Вкладені views** → оптимізатор деградує → краще CTE
 - **MySQL не має materialized view** → емуляція таблицею + Event Scheduler
 - **View ≠ кеш** — якщо потрібна продуктивність, використовуй materialized view або кеш у Redis
+
+</details>
+
+---
+
+<a id="18"></a>
+
+### 18. Які типи індексів існують у реляційних базах даних і як вони працюють? Поясніть B-Tree, Hash, Fulltext, Composite Index, а також кластерні та некластерні індекси.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Індекс — окрема структура даних що дозволяє знаходити рядки без повного сканування таблиці. Різні типи індексів оптимізовані під різні операції: B-Tree — для діапазонів і сортування, Hash — для точних рівностей, Fulltext — для пошуку по тексту. InnoDB за замовчуванням використовує B-Tree для всіх індексів.
+
+---
+
+#### B-Tree індекс (основний тип)
+
+Збалансоване дерево де листові вузли містять значення ключа + посилання на рядок (або самі дані для кластерного індексу). Висота дерева логарифмічна → пошук O(log N).
+
+```
+          [50]
+         /    \
+      [20]    [80]
+      /  \    /  \
+   [10][30][60][90]  ← листові вузли (дані або покажчики)
+```
+
+```sql
+-- Створення B-Tree індексу (дефолт в InnoDB):
+CREATE INDEX idx_email ON users(email);
+CREATE INDEX idx_created ON orders(created_at);
+
+-- Що підтримує B-Tree:
+-- ✓ Точний пошук:  WHERE email = 'a@b.com'
+-- ✓ Діапазон:      WHERE created_at BETWEEN '2024-01-01' AND '2024-12-31'
+-- ✓ Префікс:       WHERE name LIKE 'John%'
+-- ✓ Сортування:    ORDER BY created_at  (без filesort)
+-- ✓ IS NULL:       WHERE deleted_at IS NULL
+-- ✗ Суфіксний LIKE: WHERE name LIKE '%John'  → full scan
+-- ✗ Функція на колонці: WHERE YEAR(created_at) = 2024 → full scan
+```
+
+---
+
+#### Hash індекс
+
+Обчислює хеш значення ключа → прямий доступ до bucket. O(1) для точного пошуку, але не підтримує діапазони.
+
+```sql
+-- MySQL: Hash індекс тільки в MEMORY engine
+CREATE TABLE sessions (
+    token CHAR(64),
+    user_id INT,
+    INDEX USING HASH (token)
+) ENGINE = MEMORY;
+
+-- InnoDB: Adaptive Hash Index — автоматичний, не керований вручну
+-- MySQL самостійно будує hash для часто використовуваних B-Tree сторінок
+
+-- ✓ Точний пошук: WHERE token = 'abc123'  → O(1)
+-- ✗ Діапазон:     WHERE id > 100          → не використовується
+-- ✗ Сортування:   ORDER BY token          → не використовується
+-- ✗ Префікс:      WHERE token LIKE 'abc%' → не використовується
+```
+
+---
+
+#### Fulltext індекс
+
+Спеціалізований індекс для пошуку по тексту. Розбиває текст на слова (tokens) і будує інвертований індекс: слово → список рядків де воно зустрічається.
+
+```sql
+-- InnoDB підтримує FULLTEXT з MySQL 5.6+
+CREATE TABLE articles (
+    id      INT PRIMARY KEY,
+    title   VARCHAR(255),
+    content TEXT,
+    FULLTEXT INDEX ft_content (title, content)
+);
+
+-- Пошук через MATCH ... AGAINST:
+-- Natural language mode (за замовчуванням):
+SELECT *, MATCH(title, content) AGAINST('database optimization') AS score
+FROM articles
+WHERE MATCH(title, content) AGAINST('database optimization')
+ORDER BY score DESC;
+
+-- Boolean mode — підтримує +/- і wildcards:
+SELECT * FROM articles
+WHERE MATCH(title, content) AGAINST('+MySQL -MongoDB database*' IN BOOLEAN MODE);
+-- +MySQL: обов'язково є, -MongoDB: обов'язково немає, database*: префікс
+
+-- Обмеження:
+-- Мінімальна довжина слова: ft_min_word_len = 4 (за замовчуванням)
+-- Стоп-слова (the, is, a...) ігноруються
+-- Не підтримує CJK мови без плагіну
+```
+
+---
+
+#### Кластерний vs Некластерний індекс
+
+**Кластерний індекс (Clustered Index):**
+Дані таблиці фізично зберігаються у порядку ключа цього індексу. В InnoDB — це завжди PRIMARY KEY.
+
+```
+Clustered index (PRIMARY KEY = id):
+B-Tree листовий вузол містить ВЕСЬ рядок даних
+
+id=1 → {name='Alice', email='a@a.com', created_at=...}
+id=2 → {name='Bob',   email='b@b.com', created_at=...}
+id=3 → {name='Carol', email='c@c.com', created_at=...}
+```
+
+```sql
+-- Пошук за PK — найшвидший:
+SELECT * FROM users WHERE id = 42;
+-- Один прохід по B-Tree → відразу дані
+
+-- Якщо немає PK — InnoDB створює прихований 6-байтний rowid
+-- Якщо є UNIQUE NOT NULL — використовує як clustered index
+```
+
+**Некластерний індекс (Secondary Index):**
+Зберігає значення ключа + PK (а не дані). Пошук = знайти PK у secondary index → піти за PK у clustered index (double lookup).
+
+```sql
+-- Secondary index на email:
+-- B-Tree: email → id
+-- 'alice@example.com' → 1
+-- 'bob@example.com'   → 2
+
+SELECT * FROM users WHERE email = 'alice@example.com';
+-- 1. Пошук в secondary index: 'alice...' → id=1
+-- 2. Lookup у clustered index: id=1 → повний рядок
+-- (два B-Tree обходи)
+
+-- Covering index: якщо всі потрібні колонки є в індексі → другий lookup не потрібен
+CREATE INDEX idx_email_name ON users(email, name);
+SELECT name FROM users WHERE email = 'alice@example.com';
+-- Тільки один B-Tree обхід → "Using index" в EXPLAIN
+```
+
+---
+
+#### Composite Index (складений індекс)
+
+Індекс по кількох колонках. Важливий порядок: (A, B, C) — ефективний для запитів де є A, A+B, A+B+C, але не тільки B або тільки C.
+
+```sql
+CREATE INDEX idx_status_date ON orders(status, created_at);
+
+-- ✓ Використовується:
+WHERE status = 'active'                          -- рівність по першій
+WHERE status = 'active' AND created_at > '2024' -- рівність + діапазон
+WHERE status IN ('active','pending')             -- IN по першій
+
+-- ✗ НЕ використовується повністю:
+WHERE created_at > '2024-01-01'                  -- пропускає status (перша колонка)
+
+-- Правило лівого префіксу (leftmost prefix rule):
+-- Індекс (A, B, C) використовується для: A; A+B; A+B+C
+-- НЕ для: B; C; B+C
+
+-- Порядок колонок: спочатку колонки з рівністю, потім з діапазоном
+-- ✓ (status, created_at) для WHERE status=? AND created_at>?
+-- ✗ (created_at, status) для того самого запиту
+```
+
+---
+
+#### Покривний індекс (Covering Index)
+
+Індекс що містить всі колонки потрібні для запиту — читання тільки з індексу без звернення до таблиці.
+
+```sql
+-- Запит: email і name для активних користувачів
+SELECT email, name FROM users WHERE status = 'active';
+
+-- Звичайний індекс: (status) → знаходить id → lookup у таблицю за name і email
+-- Покривний індекс: (status, email, name) → всі дані вже в індексі
+CREATE INDEX idx_covering ON users(status, email, name);
+
+-- EXPLAIN: Extra = "Using index"  ← тільки індекс, без таблиці
+```
+
+---
+
+#### Порівняльна таблиця
+
+| Тип | Структура | Точний пошук | Діапазон | Сортування | Повнотекстовий |
+|-----|-----------|:---:|:---:|:---:|:---:|
+| B-Tree | Збалансоване дерево | ✓ | ✓ | ✓ | ✗ |
+| Hash | Хеш-таблиця | ✓ O(1) | ✗ | ✗ | ✗ |
+| Fulltext | Інвертований індекс | ✗ | ✗ | За релевантністю | ✓ |
+| Spatial (R-Tree) | R-Tree | ✓ | За площею | ✗ | ✗ |
+
+---
+
+#### Міні-шпаргалка
+
+- **B-Tree** — дефолт InnoDB; точний пошук, діапазони, сортування, LIKE з префіксом
+- **Hash** — O(1) для рівності, тільки MEMORY engine; InnoDB має Adaptive Hash автоматично
+- **Fulltext** — інвертований індекс; `MATCH … AGAINST`; мінімальна довжина слова 4 символи
+- **Clustered (PK)** — дані зберігаються в порядку PK; пошук за PK найшвидший
+- **Secondary index** — зберігає ключ + PK; два B-Tree обходи (якщо не covering)
+- **Covering index** — всі потрібні колонки в індексі → `Using index` без звернення до таблиці
+- **Composite**: leftmost prefix rule — порядок колонок критичний; спочатку рівності, потім діапазони
+
+</details>
+
+---
+
+<a id="19"></a>
+
+### 19. Як правильно проєктувати індекси і які типові помилки можуть погіршити продуктивність? Поясніть селективність, порядок полів у composite index, покриття індексом, over-indexing та вплив індексів на INSERT/UPDATE/DELETE.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Індекс прискорює читання, але уповільнює запис і займає місце на диску. Правильне проєктування — це баланс: індексувати те що реально використовується у WHERE/JOIN/ORDER BY з урахуванням селективності. Типові помилки: індекс на низькоселективній колонці, неправильний порядок у composite index, over-indexing write-heavy таблиць.
+
+---
+
+#### Селективність (Cardinality)
+
+Селективність — частка унікальних значень у колонці. Чим вища — тим ефективніший індекс.
+
+```sql
+-- Перевірити селективність:
+SELECT
+    COUNT(DISTINCT status) / COUNT(*) AS selectivity_status,     -- ~0.003 (3 значення з 1M)
+    COUNT(DISTINCT user_id) / COUNT(*) AS selectivity_user_id,   -- ~0.8  (800k унікальних)
+    COUNT(DISTINCT email) / COUNT(*) AS selectivity_email        -- ~1.0  (майже всі унікальні)
+FROM orders;
+
+-- Висновок:
+-- email    → висока селективність → відмінний кандидат для індексу
+-- user_id  → хороша селективність → хороший кандидат
+-- status   → низька селективність → індекс малоефективний
+```
+
+**Низькоселективний індекс — коли MySQL його ігнорує:**
+
+```sql
+CREATE INDEX idx_status ON orders(status);
+-- status має 3 значення: 'pending'(5%), 'active'(90%), 'done'(5%)
+
+SELECT * FROM orders WHERE status = 'active';
+-- MySQL може вирішити: індекс знайде 90% таблиці → дешевше full scan
+-- EXPLAIN: type=ALL (ігнорує idx_status)
+
+SELECT * FROM orders WHERE status = 'pending';
+-- Тільки 5% рядків → індекс виправданий
+-- EXPLAIN: type=ref (використовує idx_status)
+```
+
+---
+
+#### Порядок колонок у Composite Index
+
+**Правило 1: Рівності перед діапазонами**
+
+```sql
+-- Запит: WHERE status = 'active' AND created_at > '2024-01-01'
+-- ✓ Правильний порядок:
+CREATE INDEX idx_status_date ON orders(status, created_at);
+-- MySQL: спочатку звужує до status='active' → потім шукає по created_at
+
+-- ✗ Неправильний порядок:
+CREATE INDEX idx_date_status ON orders(created_at, status);
+-- MySQL: created_at > '2024' → діапазон → подальше використання status неможливе
+-- Індекс використовується тільки по created_at, status ігнорується
+```
+
+**Правило 2: Найселективніша колонка на першому місці (для рівностей)**
+
+```sql
+-- Обидва — рівності: WHERE country = 'UA' AND status = 'active'
+-- country: 50 унікальних значень (~2% рядків кожне)
+-- status:  3 унікальних значення (~33% рядків кожне)
+
+-- ✓ Більш селективна перша:
+CREATE INDEX idx_country_status ON orders(country, status);
+-- Спочатку звужуємо до ~2%, потім фільтруємо status
+
+-- ✗ Менш селективна перша:
+CREATE INDEX idx_status_country ON orders(status, country);
+-- Спочатку ~33%, потім country
+```
+
+**Правило 3: ORDER BY колонки в кінці**
+
+```sql
+-- Запит: WHERE status = 'active' ORDER BY created_at DESC
+-- ✓ Оптимально:
+CREATE INDEX idx_status_date ON orders(status, created_at);
+-- Рівність по status → відсортовані по created_at без filesort
+```
+
+---
+
+#### Типові помилки проєктування
+
+**1. Індекс на колонці що завжди у функції**
+```sql
+-- ❌ Функція вбиває індекс:
+WHERE LOWER(email) = 'test@test.com'  -- full scan
+WHERE DATE(created_at) = '2024-01-15' -- full scan
+WHERE YEAR(created_at) = 2024         -- full scan
+
+-- ✓ Виправлення:
+WHERE email = LOWER('TEST@TEST.COM')           -- індекс по email
+WHERE created_at >= '2024-01-15'
+  AND created_at < '2024-01-16'               -- range scan
+-- або Functional Index (MySQL 8.0+):
+CREATE INDEX idx_lower_email ON users((LOWER(email)));
+```
+
+**2. Implicit type conversion**
+```sql
+-- email VARCHAR, але передаємо число:
+WHERE user_id = '42'  -- MySQL конвертує '42' → 42, індекс не використовується
+WHERE user_id = 42    -- ✓
+
+-- phone VARCHAR індексована:
+WHERE phone = 380501234567  -- число, а колонка VARCHAR → full scan
+WHERE phone = '380501234567' -- ✓
+```
+
+**3. OR замість IN**
+```sql
+-- ❌ OR може не використати індекс (залежить від версії):
+WHERE status = 'pending' OR status = 'active'
+
+-- ✓ Використовуйте IN:
+WHERE status IN ('pending', 'active')
+```
+
+**4. Забутий індекс на FK**
+```sql
+-- ❌ FK без індексу → при DELETE батьківського рядка MySQL сканує всю дочірню таблицю
+CREATE TABLE orders (
+    customer_id INT,
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+    -- Немає INDEX на customer_id!
+);
+-- DELETE FROM customers WHERE id = 1 → full scan orders
+
+-- ✓ MySQL автоматично створює індекс при FOREIGN KEY декларації у InnoDB
+-- Але явний: CREATE INDEX idx_customer ON orders(customer_id);
+```
+
+---
+
+#### Over-indexing і його наслідки
+
+```sql
+-- ❌ Надмірна індексація на write-heavy таблиці:
+CREATE TABLE events (
+    id         BIGINT PRIMARY KEY,
+    user_id    INT,
+    type       VARCHAR(50),
+    payload    JSON,
+    created_at TIMESTAMP,
+    INDEX idx_user    (user_id),
+    INDEX idx_type    (type),
+    INDEX idx_created (created_at),
+    INDEX idx_user_type (user_id, type),
+    INDEX idx_type_created (type, created_at),
+    INDEX idx_user_created (user_id, created_at)
+    -- 6 індексів на таблицю з мільйоном вставок на день
+);
+
+-- Наслідки:
+-- INSERT: 6 B-Tree оновлень замість 1 → у 6 разів більше I/O
+-- UPDATE на indexed колонці: rebuild відповідного індексу
+-- DELETE: видалення із всіх індексів
+-- Розмір таблиці: індекси можуть займати більше місця ніж самі дані
+```
+
+**Виявлення невикористовуваних індексів:**
+```sql
+-- MySQL 8.0+ sys schema:
+SELECT * FROM sys.schema_unused_indexes
+WHERE object_schema = 'mydb';
+
+-- Або через performance_schema:
+SELECT object_schema, object_name, index_name
+FROM performance_schema.table_io_waits_summary_by_index_usage
+WHERE index_name IS NOT NULL
+  AND count_star = 0
+  AND object_schema = 'mydb';
+```
+
+---
+
+#### Вплив на INSERT / UPDATE / DELETE
+
+```sql
+-- INSERT: для кожного нового рядка → оновити всі індекси
+-- На таблиці з 5 індексами: 1 вставка = 6 B-Tree операцій
+
+-- Bulk insert оптимізація:
+-- InnoDB: тимчасово вимикає оновлення secondary indexes при LOAD DATA INFILE
+-- або вручну:
+ALTER TABLE orders DISABLE KEYS;
+INSERT INTO orders ... (мільйони рядків);
+ALTER TABLE orders ENABLE KEYS;  -- перебудова індексів одним разом — швидше
+
+-- UPDATE: оновлює індекс тільки для тих колонок що змінились
+UPDATE orders SET status = 'done' WHERE id = 1;
+-- Оновлює: idx_status (якщо є), clustered index
+-- НЕ оновлює: idx_customer, idx_created (ці колонки не змінились)
+
+-- DELETE: видаляє запис з усіх індексів
+-- InnoDB: не відразу звільняє місце → фрагментація → OPTIMIZE TABLE
+```
+
+---
+
+#### Плюси і мінуси індексів
+
+| | Читання | Запис | Диск |
+|---|---|---|---|
+| З індексом | ✓ O(log N) замість O(N) | ✗ Overhead на кожну DML | ✗ Додаткові 10-50% від розміру таблиці |
+| Без індексу | ✗ Full scan | ✓ Немає overhead | ✓ Тільки дані |
+
+**Практичне правило:** на read-heavy таблицях (95% SELECT) — індексуй агресивно. На write-heavy (черги, логи, метрики) — мінімум індексів, тільки ті що критично потрібні.
+
+---
+
+#### Чеклист правильного індексування
+
+```
+✓ Індексуй колонки у WHERE, JOIN ON, ORDER BY, GROUP BY
+✓ Composite: рівності перед діапазонами, більш селективні перші
+✓ Covering index якщо SELECT бере мало колонок
+✓ Перевіряй EXPLAIN: type=ALL або filesort → можливо потрібен індекс
+✓ Видаляй невикористовувані індекси
+✓ На FK — завжди індекс (InnoDB додає автоматично)
+
+✗ Не індексуй low-cardinality колонки (boolean, status з 2-3 значень)
+✗ Не створюй надто багато індексів на write-heavy таблицях
+✗ Не використовуй функції на індексованих колонках у WHERE
+✗ Не ігноруй типи даних при порівнянні (implicit cast)
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Селективність** — частка унікальних значень; висока (~1.0) → ефективний індекс; низька (~0.01) → MySQL може ігнорувати
+- **Composite**: рівності → діапазони → ORDER BY; leftmost prefix rule
+- **Over-indexing** → кожен INSERT/UPDATE/DELETE оновлює всі індекси → bottleneck на write-heavy таблицях
+- **Функція у WHERE** на індексованій колонці → full scan; використовуй Functional Index (MySQL 8+) або переписуй умову
+- **Невикористовувані індекси** → `sys.schema_unused_indexes`; видаляй щоб не уповільнювати запис
+- **EXPLAIN** — головний інструмент: `type=ALL` → full scan; `Extra: Using index` → covering index
+
+</details>
+
+---
+
+<a id="20"></a>
+
+### 20. Як аналізувати та оптимізувати повільні SQL-запити? Поясніть, що таке план виконання запиту, як використовувати EXPLAIN, на що дивитися при аналізі (type, key, rows, Extra, filesort, temporary, full scan), як виявляти проблеми з індексами та JOIN, і чи може порядок JOIN впливати на продуктивність.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Оптимізація повільних запитів починається з виявлення (slow query log), продовжується аналізом плану виконання (`EXPLAIN`) і завершується виправленням — додаванням індексів, переписуванням запиту або зміною схеми. `EXPLAIN` показує як MySQL планує виконати запит: які таблиці і в якому порядку сканує, які індекси використовує, скільки рядків обробляє.
+
+---
+
+#### Slow Query Log — виявлення проблем
+
+```sql
+-- Увімкнути slow query log:
+SET GLOBAL slow_query_log = 'ON';
+SET GLOBAL long_query_time = 1;          -- запити довші за 1 секунду
+SET GLOBAL log_queries_not_using_indexes = 'ON';  -- також без індексів
+
+-- Переглянути налаштування:
+SHOW VARIABLES LIKE 'slow_query%';
+SHOW VARIABLES LIKE 'long_query_time';
+
+-- Файл логу: /var/log/mysql/slow.log
+-- Аналіз: mysqldumpslow -s t -t 10 /var/log/mysql/slow.log
+-- -s t: сортувати за часом; -t 10: топ 10 запитів
+```
+
+---
+
+#### EXPLAIN — основний інструмент
+
+```sql
+EXPLAIN SELECT o.id, c.name, SUM(oi.price)
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+JOIN order_items oi ON oi.order_id = o.id
+WHERE o.status = 'active'
+GROUP BY o.id, c.name;
+```
+
+Результат EXPLAIN — рядок для кожної таблиці у плані виконання:
+
+```
++----+-------------+-------+--------+------------------+---------+---------+------+------+-----------------------------+
+| id | select_type | table | type   | possible_keys    | key     | key_len | ref  | rows | Extra                       |
++----+-------------+-------+--------+------------------+---------+---------+------+------+-----------------------------+
+|  1 | SIMPLE      | o     | ref    | idx_status,idx_c | idx_s.. | 82      | con  | 1200 | Using index condition       |
+|  1 | SIMPLE      | c     | eq_ref | PRIMARY          | PRIMARY | 4       | o.c  |    1 |                             |
+|  1 | SIMPLE      | oi    | ref    | idx_order        | idx_ord | 4       | o.id |    3 | NULL                        |
++----+-------------+-------+--------+------------------+---------+---------+------+------+-----------------------------+
+```
+
+---
+
+#### Ключові поля EXPLAIN
+
+**`type` — тип доступу (від найкращого до найгіршого):**
+
+| type | Опис | Коли |
+|------|------|------|
+| `system` | Одна таблиця з одним рядком | Системні таблиці |
+| `const` | Один рядок за PK або UNIQUE | `WHERE id = 1` |
+| `eq_ref` | Один рядок з іншої таблиці по PK/UNIQUE | JOIN по PK |
+| `ref` | Кілька рядків за не-унікальним індексом | `WHERE status = 'active'` |
+| `range` | Діапазон по індексу | `WHERE id BETWEEN 1 AND 100` |
+| `index` | Full scan індексу (краще ніж ALL) | `ORDER BY indexed_col` |
+| `ALL` | **Full table scan** — проблема! | Немає індексу |
+
+```sql
+-- ❌ Тривога: type=ALL на великій таблиці
+-- id=1, table=orders, type=ALL, rows=1000000
+-- → Немає відповідного індексу, MySQL читає мільйон рядків
+```
+
+**`key` — який індекс використовується:**
+```sql
+-- key=NULL → індекс не використовується → проблема
+-- key=PRIMARY → clustered index → добре
+-- key=idx_status → secondary index → нормально
+
+-- possible_keys: які індекси MySQL розглядав
+-- key: який обрав (або NULL якщо жоден)
+```
+
+**`rows` — оцінка кількості рядків що будуть прочитані:**
+```sql
+-- rows=1 → ідеально (eq_ref/const)
+-- rows=1000000 → серйозна проблема
+-- Це ОЦІНКА оптимізатора, не точне число
+-- Добуток rows всіх таблиць = загальна робота
+```
+
+**`Extra` — додаткова інформація:**
+
+| Extra | Значення |
+|-------|----------|
+| `Using index` | Covering index, без звернення до таблиці ✓ |
+| `Using where` | Фільтрація після читання (нормально) |
+| `Using filesort` | Сортування без індексу — **дорого** |
+| `Using temporary` | Тимчасова таблиця (GROUP BY без індексу) — **дорого** |
+| `Using index condition` | Index Condition Pushdown (ICP) — оптимізація ✓ |
+| `Impossible WHERE` | Умова завжди false → 0 рядків |
+
+```sql
+-- ❌ Небезпечна комбінація:
+-- Extra: Using temporary; Using filesort
+-- → GROUP BY без індексу + сортування → tmp таблиця + sort → дуже повільно
+
+-- ✓ Ідеальний результат:
+-- type=ref або eq_ref, key=<індекс>, rows=невелике число, Extra=Using index
+```
+
+---
+
+#### EXPLAIN ANALYZE (MySQL 8.0+)
+
+Виконує запит і показує реальний час та кількість рядків:
+
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM orders WHERE status = 'active' ORDER BY created_at;
+
+-- Результат:
+-- -> Sort: orders.created_at  (actual time=45.2..46.1 rows=12000 loops=1)
+--    -> Filter: (orders.status = 'active')  (actual time=0.1..38.4 rows=12000 loops=1)
+--       -> Table scan on orders  (actual time=0.08..25.1 rows=100000 loops=1)
+-- Видно: full scan 100k рядків → відфільтровано 12k → відсортовано
+
+-- Порівняно з оцінкою: rows_estimated vs rows_actual
+-- Якщо сильно відрізняються → застарілі статистики → ANALYZE TABLE orders;
+```
+
+---
+
+#### Порядок JOIN і оптимізатор
+
+MySQL Query Optimizer самостійно визначає порядок JOIN на основі статистик (cardinality, index availability). Але розуміти це важливо:
+
+```sql
+-- Запит:
+SELECT * FROM orders o
+JOIN customers c ON o.customer_id = c.id
+JOIN countries co ON c.country_id = co.id
+WHERE co.code = 'UA';
+
+-- MySQL може вирішити:
+-- 1. Спочатку countries (co.code='UA' → 1 рядок)
+-- 2. Потім customers по country_id (кілька рядків)
+-- 3. Потім orders по customer_id (більше рядків)
+-- → "від малого до великого" — ефективніше
+
+-- Або навпаки якщо оптимізатор помиляється через застарілі статистики:
+ANALYZE TABLE orders, customers, countries;  -- оновити статистики
+
+-- Примусовий порядок (STRAIGHT_JOIN):
+SELECT STRAIGHT_JOIN * FROM orders o
+JOIN customers c ON o.customer_id = c.id;
+-- Виконує JOIN саме в тому порядку що написано (рідко потрібно)
+```
+
+**Чи впливає порядок JOIN на результат?** — Ні (INNER JOIN комутативний). На продуктивність — так, якщо оптимізатор обирає неефективний порядок.
+
+---
+
+#### Практичний workflow оптимізації
+
+```sql
+-- Крок 1: Знайти повільний запит (slow log або моніторинг)
+
+-- Крок 2: EXPLAIN
+EXPLAIN SELECT ...;
+-- Дивимось: type=ALL? key=NULL? rows=мільйони? Extra=filesort/temporary?
+
+-- Крок 3: Перевірити наявні індекси
+SHOW INDEX FROM orders;
+
+-- Крок 4: Додати індекс і перевірити знову
+CREATE INDEX idx_status_created ON orders(status, created_at);
+EXPLAIN SELECT ...;  -- тепер type=range? rows=менше?
+
+-- Крок 5: Оновити статистики якщо план не змінився
+ANALYZE TABLE orders;
+
+-- Крок 6: EXPLAIN ANALYZE (MySQL 8.0+) для перевірки реального часу
+EXPLAIN ANALYZE SELECT ...;
+
+-- Крок 7: Якщо індекс не допомагає — переписати запит
+-- (прибрати функції на колонках, розбити на підзапити, денормалізувати)
+```
+
+---
+
+#### Часті проблеми та їх виправлення
+
+```sql
+-- 1. Full scan через функцію
+-- ❌ Extra: Using where, type=ALL
+WHERE DATE(created_at) = '2024-01-15'
+-- ✓ Виправлення:
+WHERE created_at >= '2024-01-15' AND created_at < '2024-01-16'
+
+-- 2. filesort через відсутній індекс
+-- ❌ Extra: Using filesort
+ORDER BY created_at DESC
+-- ✓ CREATE INDEX idx_created ON orders(created_at)
+
+-- 3. Using temporary через GROUP BY
+-- ❌ Extra: Using temporary; Using filesort
+GROUP BY customer_id
+-- ✓ CREATE INDEX idx_customer ON orders(customer_id)
+
+-- 4. Застарілі статистики — оптимізатор обирає хибний план
+-- rows=1000 (оцінка) vs rows=1000000 (реальність)
+ANALYZE TABLE orders;  -- оновити статистики
+
+-- 5. Subquery замість JOIN
+-- ❌ Виконується для кожного рядка
+WHERE customer_id IN (SELECT id FROM customers WHERE country = 'UA')
+-- ✓ Переписати через JOIN або EXISTS
+JOIN customers c ON o.customer_id = c.id AND c.country = 'UA'
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Slow query log** → виявлення; `long_query_time=1`, `log_queries_not_using_indexes=ON`
+- **EXPLAIN** → аналіз плану; `EXPLAIN ANALYZE` (8.0+) → реальний час виконання
+- **type=ALL** → full scan → потрібен індекс або переписати запит
+- **key=NULL** → індекс не використовується → перевірити чи немає функцій/implicit cast
+- **rows** → добуток по всіх таблицях = обсяг роботи; великий → проблема
+- **Using filesort** → сортування без індексу → додати індекс на ORDER BY колонку
+- **Using temporary** → GROUP BY без індексу → додати індекс або переписати
+- **Порядок JOIN** → оптимізатор обирає сам; `STRAIGHT_JOIN` — примусовий порядок (рідко)
+- **ANALYZE TABLE** → оновити статистики якщо план виглядає нелогічно
+
+</details>
+
+---
+
+<a id="21"></a>
+
+### 21. Які загальні підходи до оптимізації продуктивності бази даних ви використовуєте на практиці? Поясніть роботу з індексами, профілювання запитів, денормалізацію, кешування, партиціювання, read/write split та архітектурні підходи.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Оптимізація БД — багаторівнева задача. Починати треба з найдешевшого і найефективнішого: правильні індекси та переписані запити дають 80% результату. Далі — кешування, денормалізація, партиціювання. Архітектурні зміни (шардинг, read/write split) — останній крок, коли решта вичерпана. Головне правило: вимірюй перш ніж оптимізувати.
+
+---
+
+#### Рівень 1: Запити та індекси (найбільший вплив)
+
+```sql
+-- 1. Виявлення повільних запитів
+SET GLOBAL slow_query_log = 'ON';
+SET GLOBAL long_query_time = 0.5;
+
+-- 2. EXPLAIN для кожного підозрілого запиту
+-- Шукати: type=ALL, key=NULL, Using filesort, Using temporary
+
+-- 3. Правильні індекси
+-- Composite: рівності → діапазони → ORDER BY
+CREATE INDEX idx_status_customer_date ON orders(status, customer_id, created_at);
+
+-- Covering index для часто використовуваних SELECT:
+CREATE INDEX idx_cover ON orders(status, created_at, amount);
+-- SELECT amount FROM orders WHERE status='active' ORDER BY created_at
+-- → Using index (без звернення до таблиці)
+
+-- 4. Переписати запити
+-- Прибрати функції на індексованих колонках
+-- WHERE created_at >= '2024-01-01' замість WHERE YEAR(created_at) = 2024
+-- JOIN замість correlated subquery
+```
+
+---
+
+#### Рівень 2: Конфігурація MySQL
+
+```ini
+# /etc/mysql/conf.d/performance.cnf
+
+# InnoDB Buffer Pool: 70-80% RAM на dedicated DB сервері
+innodb_buffer_pool_size = 8G
+
+# Buffer pool instances (для паралелізму, 1 на 1GB)
+innodb_buffer_pool_instances = 8
+
+# Redo log розмір (більше = менше checkpoint I/O)
+innodb_log_file_size = 1G
+
+# Query cache (MySQL 8.0 видалив його — він більше шкодив ніж допомагав)
+# Не використовувати query_cache в MySQL 5.7+
+
+# Connection pool
+max_connections = 200
+thread_cache_size = 50
+
+# Tmp table в пам'яті (для GROUP BY / ORDER BY без індексу)
+tmp_table_size = 256M
+max_heap_table_size = 256M
+```
+
+---
+
+#### Рівень 3: Денормалізація
+
+```sql
+-- Кешовані агрегати: уникати COUNT(*) на кожен запит
+ALTER TABLE posts ADD COLUMN comments_count INT UNSIGNED DEFAULT 0;
+ALTER TABLE posts ADD COLUMN likes_count    INT UNSIGNED DEFAULT 0;
+
+-- Оновлення через тригер або в коді застосунку:
+UPDATE posts SET comments_count = comments_count + 1 WHERE id = NEW.post_id;
+
+-- Дублювання часто читаних полів (уникнути JOIN):
+ALTER TABLE orders ADD COLUMN customer_name VARCHAR(255);
+-- Заповнювати при створенні замовлення, не брати JOIN кожного разу
+
+-- Матеріалізований звіт (таблиця + cron):
+CREATE TABLE daily_revenue_cache (
+    date DATE PRIMARY KEY,
+    revenue DECIMAL(15,2),
+    orders_count INT
+);
+-- Оновлювати раз на добу замість агрегації мільйонів рядків live
+```
+
+---
+
+#### Рівень 4: Кешування (Redis / Memcached)
+
+```
+Стратегії кешування:
+
+Cache-Aside (найпоширеніша):
+  1. App перевіряє Redis
+  2. Hit → повертає з кешу
+  3. Miss → запит до БД → зберігає в Redis → повертає
+
+Write-Through:
+  Запис одночасно в БД і кеш → завжди актуально, але повільніший запис
+
+Write-Behind (Write-Back):
+  Запис в кеш → асинхронно в БД → швидко, але ризик втрати даних при збої
+```
+
+```php
+// Cache-Aside на практиці (PHP + Redis):
+$key = "user:{$id}";
+$user = $redis->get($key);
+
+if (!$user) {
+    $user = $db->query("SELECT * FROM users WHERE id = ?", [$id]);
+    $redis->setex($key, 3600, serialize($user));  // TTL 1 година
+}
+
+// Інвалідація при оновленні:
+$db->query("UPDATE users SET name = ? WHERE id = ?", [$name, $id]);
+$redis->del("user:{$id}");
+```
+
+**Що кешувати:** профілі користувачів, результати важких агрегацій, конфіг, довідкові таблиці.
+
+**Що не кешувати:** фінансові транзакції, real-time дані, персональні дані без TTL.
+
+---
+
+#### Рівень 5: Партиціювання
+
+```sql
+-- Велика таблиця логів: партиціювання по місяцях
+CREATE TABLE access_logs (
+    id         BIGINT,
+    user_id    INT,
+    url        VARCHAR(500),
+    created_at DATETIME NOT NULL
+) PARTITION BY RANGE (YEAR(created_at) * 100 + MONTH(created_at)) (
+    PARTITION p202401 VALUES LESS THAN (202402),
+    PARTITION p202402 VALUES LESS THAN (202403),
+    -- ...
+    PARTITION p_future VALUES LESS THAN MAXVALUE
+);
+
+-- Запити автоматично читають тільки потрібні партиції (partition pruning)
+SELECT * FROM access_logs WHERE created_at >= '2024-03-01';
+-- Читає тільки p202403, а не всю таблицю
+
+-- Архівування: миттєве видалення старих даних
+ALTER TABLE access_logs DROP PARTITION p202401;  -- замість DELETE мільйонів рядків
+```
+
+---
+
+#### Рівень 6: Read/Write Split (реплікація)
+
+```
+[App] → [Connection Proxy / ProxySQL]
+              ├── Primary (запис):  INSERT, UPDATE, DELETE
+              └── Replica 1,2,3 (читання): SELECT
+
+Результат: читання масштабується горизонтально
+```
+
+```php
+// Визначення типу запиту і вибір з'єднання:
+class DB {
+    public function query(string $sql): array {
+        $isWrite = preg_match('/^\s*(INSERT|UPDATE|DELETE|CREATE|DROP)/i', $sql);
+        $conn = $isWrite ? $this->primary : $this->replica();
+        return $conn->query($sql);
+    }
+
+    private function replica(): PDO {
+        // Round-robin або random між репліками
+        return $this->replicas[array_rand($this->replicas)];
+    }
+}
+```
+
+**Підводні камені read/write split:**
+- Replication lag: запис → одразу читаємо з репліки → може бути старе значення
+- Рішення: після write операцій читати з primary певний час (sticky session), або через ProxySQL routing
+
+---
+
+#### Рівень 7: Архітектурні рішення
+
+```
+Connection Pooling (PgBouncer / ProxySQL):
+  БД → обмежена кількість з'єднань (200-500)
+  App instances → тисячі concurrent requests
+  Пул з'єднань → multiplexing, черга, переиспользование
+
+Шардинг (horizontal partitioning):
+  Коли один сервер вже не справляється з записом
+  Vitess (MySQL), Citus (PostgreSQL)
+  → Last resort: складно, дорого, важко підтримувати
+
+CQRS (Command Query Responsibility Segregation):
+  Write model → нормалізована БД
+  Read model → денормалізований read store (окрема БД або проекція)
+  → Оптимізується кожна сторона незалежно
+
+Event Sourcing:
+  Замість UPDATE — append-only лог подій
+  → Ніколи не оновлюємо, тільки додаємо
+  → Природно масштабується для запису
+```
+
+---
+
+#### Пріоритети оптимізації
+
+| Крок | Зусилля | Вплив |
+|------|---------|-------|
+| Правильні індекси | Низькі | Дуже високий |
+| Переписати запити | Середні | Високий |
+| Кешування (Redis) | Середні | Високий |
+| MySQL конфігурація | Низькі | Середній |
+| Денормалізація | Середні | Середній |
+| Партиціювання | Середні | Середній |
+| Read/write split | Високі | Середній |
+| Шардинг | Дуже високі | Високий (але крайній захід) |
+
+---
+
+#### Міні-шпаргалка
+
+- **Спочатку вимірюй**: slow log → EXPLAIN → профайлер → потім оптимізуй
+- **80% результату** дають правильні індекси і переписані запити
+- **Кешування** (Redis) — розвантажує БД від повторюваних важких SELECT
+- **Денормалізація** — кешовані лічильники, дублювання полів для уникнення JOIN
+- **Партиціювання** — для великих таблиць з часовими даними; partition pruning + швидкий DROP PARTITION
+- **Read/write split** — горизонтальне масштабування читання; обережно з replication lag
+- **Connection pool** — завжди між app і БД на production; PgBouncer / ProxySQL
+- **Шардинг** — останній крок, коли все інше вичерпане
 
 </details>
