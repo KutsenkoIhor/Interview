@@ -5055,6 +5055,8 @@ InnoDB використовує **row-level locking** — блокує окре�
 
 </details>
 
+---
+
 <a id="27"></a>
 
 ### 27. Що таке реплікація в базах даних, навіщо вона потрібна, які типи реплікації існують і які в неї обмеження? Поясніть підходи на кшталт master-replica, сценарії для read scaling, проблеми replication lag і consistency issues, а також компроміси між продуктивністю, консистентністю та складністю підтримки.
@@ -5255,6 +5257,8 @@ Replica потребує ресурсів. SQL thread на replica викону�
 
 </details>
 
+---
+
 <a id="28"></a>
 
 ### 28. Що таке партиціювання таблиць, які задачі воно вирішує і які проблеми може створювати? Поясніть, як працює partition pruning, які бувають типи partitioning та коли партиціювання може не дати очікуваного ефекту.
@@ -5426,6 +5430,8 @@ EXPLAIN SELECT * FROM orders WHERE created = '2023-06-15'\G
 
 </details>
 
+---
+
 <a id="29"></a>
 
 ### 29. Що таке шардінг, коли він потрібен і які складнощі з'являються після його впровадження? Поясніть розподіл даних, складність join-ів, транзакцій між шардами та routing запитів.
@@ -5576,6 +5582,8 @@ EXPLAIN SELECT * FROM orders WHERE created = '2023-06-15'\G
 - **Scatter-gather** — запит без shard key іде на всі шарди паралельно і merge результатів
 
 </details>
+
+---
 
 <a id="30"></a>
 
@@ -5761,6 +5769,8 @@ Elasticsearch виправданий коли:
 - **Elasticsearch потрібен**: морфологія, fuzzy, suggest, facets, великий обсяг, пошук як core-feature
 
 </details>
+
+---
 
 <a id="31"></a>
 
@@ -6028,6 +6038,8 @@ Stream vs List: List — проста черга де повідомлення �
 - **Stream**: persistent append-only лог, consumer groups з ack, replay — легка альтернатива Kafka
 
 </details>
+
+---
 
 <a id="32"></a>
 
@@ -6322,6 +6334,8 @@ GEODIST  drivers  "driver:1"  "driver:2"  km
 
 </details>
 
+---
+
 <a id="33"></a>
 
 ### 33. Що таке RabbitMQ і для яких задач у бекенд-системі він використовується? Поясніть черги, асинхронну обробку, retry, decoupling між сервісами та типові кейси.
@@ -6588,6 +6602,8 @@ basic_qos(prefetch_count=1)
 - **vs Kafka**: RabbitMQ — черга задач (видаляє після ack); Kafka — лог подій (зберігає, replay можливий)
 
 </details>
+
+---
 
 <a id="34"></a>
 
