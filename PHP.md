@@ -20,6 +20,44 @@
 14. [Що таке copy-on-write у PHP і як це впливає на роботу зі змінними та масивами?](#14)
 15. [Що таке стек і купа в контексті роботи програми, і як це пов'язано з виконанням PHP-коду?](#15)
 
+## Блок 2. Масиви, рядки, ітерація та структури даних
+
+16. [Як у PHP правильно перебирати масиви і які способи ітерації ви використовуєте на практиці?](#16)
+17. [Як отримати наступний елемент масиву, якщо ви не знаєте його ключа?](#17)
+18. [Які типові проблеми та особливості роботи з масивами в PHP варто враховувати на senior-рівні?](#18)
+19. [Як працює foreach у PHP, і що буде, якщо ітерувати рядок або модифікувати масив під час ітерації?](#19)
+20. [Що означає складність алгоритму і чому це важливо в повсякденній PHP-розробці?](#20)
+21. [Які структури даних ви знаєте і які використовували на практиці?](#21)
+22. [У чому різниця між стеком і чергою як структурами даних?](#22)
+23. [Що таке рекурсія, які в неї переваги, недоліки та типові сценарії використання?](#23)
+
+## Блок 3. Помилки, винятки, пам’ять і діагностика
+
+24. [Як у PHP перехоплювати warning/error-повідомлення і коли це доцільно робити?](#24)
+25. [Як ви розумієте exception flow у PHP і як правильно будувати обробку винятків у застосунку?](#25)
+26. [Що таке витоки пам’яті в PHP, у яких сценаріях вони можливі і як їх виявляти?](#26)
+27. [Як у PHP працює garbage collector і коли має сенс взаємодіяти з ним явно?](#27)
+28. [Як у PHP очищати або вивільняти пам’ять у довгоживучих процесах?](#28)
+29. [Що таке opcode, як він пов’язаний із виконанням PHP-коду і чому це важливо для продуктивності?](#29)
+30. [Що таке OPcache і як він працює в PHP?](#30)
+31. [Що таке JIT у PHP і які задачі він реально допомагає вирішувати?](#31)
+32. [Які інструменти для профілювання та аналізу продуктивності PHP-коду ви використовували на практиці?](#32)
+33. [Що ви знаєте про статичний аналіз коду в PHP і які інструменти використовували?](#33)
+
+## Блок 4. ООП, наслідування та об’єктна модель PHP
+
+34. [Які принципи ООП ви вважаєте базовими і як вони проявляються в PHP?](#34)
+35. [Які модифікатори видимості існують у PHP і як вони працюють у контексті наслідування?](#35)
+36. [Чи можна змінювати видимість методів або властивостей у дочірньому класі, і які тут існують правила?](#36)
+37. [Що таке пізнє статичне зв'язування у PHP і для чого воно потрібне?](#37)
+38. [У чому різниця між self, static і $this у PHP?](#38)
+39. [Для чого в PHP потрібні магічні методи і які ризики вони створюють при неправильному використанні?](#39)
+40. [Які магічні методи ви знаєте і в яких сценаріях їх реально застосовують?](#40)
+41. [Як працює клонування об'єктів у PHP і коли викликається метод __clone()?](#41)
+42. [У чому різниця між shallow clone і deep clone для об'єктів із вкладеними залежностями?](#42)
+43. [Що таке інтерфейс у PHP, що він може містити і коли інтерфейс доречніший за абстрактний клас?](#43)
+44. [Що таке абстрактний клас і в чому його відмінність від інтерфейсу?](#44)
+
 ---
 
 <a id="1"></a>
@@ -983,6 +1021,2983 @@ PHP не має вбудованого обмеження глибини сте�
 - Об'єкти, масиви, zval — у heap; управляються refcount + GC
 - Нескінченна рекурсія → C-стек overflow → segfault або fatal error
 - Fibers (8.1) — власний стек у heap для кожного fiber
+
+</details>
+
+---
+
+---
+
+<a id="16"></a>
+
+### 16. Як у PHP правильно перебирати масиви і які способи ітерації ви використовуєте на практиці?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**`foreach`** — основний і найчитабельніший спосіб для більшості задач:
+```php
+$users = ['Alice', 'Bob', 'Charlie'];
+
+foreach ($users as $user) {
+    echo $user;
+}
+
+// З ключем:
+foreach (['a' => 1, 'b' => 2] as $key => $value) {
+    echo "$key: $value";
+}
+```
+
+**`for`** — коли потрібен індекс або нестандартний крок:
+```php
+$arr = [1, 2, 3, 4, 5];
+
+for ($i = 0; $i < count($arr); $i++) {  // погано: count() кожну ітерацію
+    echo $arr[$i];
+}
+
+$n = count($arr);
+for ($i = 0; $i < $n; $i++) {           // краще: count() один раз
+    echo $arr[$i];
+}
+
+// Кожен другий елемент:
+for ($i = 0; $i < $n; $i += 2) {
+    echo $arr[$i];
+}
+```
+
+**`array_map` / `array_filter` / `array_reduce`** — функціональний стиль, повертають новий масив без мутації:
+```php
+$numbers = [1, 2, 3, 4, 5];
+
+$doubled  = array_map(fn($n) => $n * 2, $numbers);           // [2,4,6,8,10]
+$evens    = array_filter($numbers, fn($n) => $n % 2 === 0);  // [2,4]
+$sum      = array_reduce($numbers, fn($carry, $n) => $carry + $n, 0); // 15
+```
+
+**`array_walk`** — ітерує масив in-place, передає ключ і значення за посиланням:
+```php
+$prices = ['apple' => 1.0, 'banana' => 0.5];
+array_walk($prices, function (&$price, $item) {
+    $price *= 1.2; // +20% до кожної ціни
+});
+```
+
+**`list()` / деструктуризація** — розпаковка при ітерації:
+```php
+$points = [[1, 2], [3, 4], [5, 6]];
+
+foreach ($points as [$x, $y]) {
+    echo "x=$x y=$y";
+}
+
+// Асоціативна деструктуризація:
+$users = [['name' => 'Alice', 'age' => 30]];
+foreach ($users as ['name' => $name, 'age' => $age]) {
+    echo "$name is $age";
+}
+```
+
+**Generators** — ліниве обчислення великих колекцій:
+```php
+function csvLines(string $file): Generator
+{
+    $handle = fopen($file, 'r');
+    while (($line = fgets($handle)) !== false) {
+        yield str_getcsv($line);
+    }
+    fclose($handle);
+}
+
+foreach (csvLines('big.csv') as $row) {
+    process($row); // в пам'яті завжди тільки один рядок
+}
+```
+
+**Що обирати на практиці:**
+- `foreach` — за замовчуванням, читабельно
+- `array_map`/`filter`/`reduce` — трансформації без мутації, pipeline-стиль
+- `for` — потрібен індекс або нестандартний крок
+- Generator — великі або нескінченні набори даних
+
+#### Міні-шпаргалка
+
+- `foreach` — основний спосіб; `as $k => $v` для ключа
+- `for` — з індексом; `count()` виносити до умови
+- `array_map/filter/reduce` — функціональний стиль, без мутації оригіналу
+- `[$x, $y] =` / `foreach ... as [$x, $y]` — деструктуризація
+- Generator (`yield`) — ліниве читання великих наборів без завантаження в пам'ять
+
+</details>
+
+---
+
+<a id="17"></a>
+
+### 17. Як отримати наступний елемент масиву, якщо ви не знаєте його ключа?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+PHP має внутрішній вказівник масиву (array pointer). Функції `current()`, `next()`, `prev()`, `reset()`, `end()` управляють ним напряму.
+
+```php
+$arr = ['a' => 1, 'b' => 2, 'c' => 3];
+
+echo current($arr); // 1 — поточний елемент
+echo next($arr);    // 2 — рухає вказівник і повертає наступний
+echo next($arr);    // 3
+echo next($arr);    // false — кінець масиву
+
+reset($arr);        // вказівник на початок
+echo current($arr); // 1
+
+end($arr);          // вказівник на кінець
+echo current($arr); // 3
+echo prev($arr);    // 2
+```
+
+**Проблема:** `foreach` скидає внутрішній вказівник після ітерації (в PHP 7+ foreach працює з копією масиву і не змінює оригінальний вказівник). Але змішувати `foreach` і `next()`/`current()` — поганий стиль.
+
+**Практичні альтернативи:**
+
+Отримати наступний елемент після відомого ключа:
+```php
+function nextValue(array $arr, string|int $key): mixed
+{
+    $keys = array_keys($arr);
+    $pos  = array_search($key, $keys);
+
+    return $pos !== false && isset($keys[$pos + 1])
+        ? $arr[$keys[$pos + 1]]
+        : null;
+}
+```
+
+Через `ArrayIterator`:
+```php
+$it = new ArrayIterator(['a' => 1, 'b' => 2, 'c' => 3]);
+$it->rewind();
+$it->next(); // перейти до другого елемента
+echo $it->current(); // 2
+echo $it->key();     // 'b'
+```
+
+**Найчистіший підхід у реальному коді** — отримати всі ключі і йти по індексу:
+```php
+$keys = array_keys($arr);
+foreach ($keys as $i => $key) {
+    $nextKey = $keys[$i + 1] ?? null;
+    $next    = $nextKey !== null ? $arr[$nextKey] : null;
+}
+```
+
+#### Міні-шпаргалка
+
+- `current()` — поточний; `next()` — рухає вказівник і повертає наступний
+- `reset()` — на початок; `end()` — на кінець; `prev()` — назад
+- `next()` повертає `false` в кінці — пастка якщо `false` є валідним значенням
+- Чистіше: `array_keys()` + індекс `$keys[$i + 1]`
+- `ArrayIterator` для OOP-стилю
+
+</details>
+
+---
+
+<a id="18"></a>
+
+### 18. Які типові проблеми та особливості роботи з масивами в PHP варто враховувати на senior-рівні?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**1. Збереження ключів після `array_filter` і `array_slice`:**
+```php
+$arr = [1, 2, 3, 4, 5];
+$even = array_filter($arr, fn($n) => $n % 2 === 0);
+print_r($even); // [1 => 2, 3 => 4] — ключі зберігаються!
+
+// Якщо потрібні послідовні ключі:
+$even = array_values($even); // [0 => 2, 1 => 4]
+```
+
+`array_slice` за замовчуванням скидає ключі для числових масивів, але зберігає для рядкових. Третій параметр `preserve_keys`:
+```php
+array_slice($arr, 1, 2);            // ключі скинуті: [0=>2, 1=>3]
+array_slice($arr, 1, 2, true);      // ключі збережені: [1=>2, 2=>3]
+```
+
+**2. `array_merge` vs `+` (union operator):**
+```php
+$a = ['x' => 1, 'y' => 2];
+$b = ['y' => 99, 'z' => 3];
+
+print_r(array_merge($a, $b)); // ['x'=>1, 'y'=>99, 'z'=>3] — b перезаписує a
+print_r($a + $b);             // ['x'=>1, 'y'=>2,  'z'=>3] — a має пріоритет
+
+// Числові ключі — array_merge перенумеровує:
+$x = [0 => 'a'];
+$y = [0 => 'b'];
+print_r(array_merge($x, $y)); // [0=>'a', 1=>'b'] — перенумерував
+print_r($x + $y);             // [0=>'a'] — ключ 0 вже є, b ігнорується
+```
+
+**3. Сортування і збереження ключів:**
+```php
+$arr = ['b' => 2, 'a' => 1, 'c' => 3];
+
+sort($arr);   // скидає ключі: [0=>1, 1=>2, 2=>3]
+asort($arr);  // зберігає ключі: ['a'=>1, 'b'=>2, 'c'=>3]
+ksort($arr);  // сортує за ключами
+
+// Власне порівняння:
+usort($arr, fn($a, $b) => $a <=> $b);  // скидає ключі
+uasort($arr, fn($a, $b) => $a <=> $b); // зберігає ключі
+uksort($arr, fn($a, $b) => $a <=> $b); // сортує за ключами
+```
+
+**4. `in_array` без строгого порівняння:**
+```php
+$arr = [0, 1, 2];
+var_dump(in_array("foo", $arr)); // true! — "foo" == 0 (PHP 7, loose)
+var_dump(in_array("foo", $arr, true)); // false — strict
+
+// Завжди передавати третій параметр true:
+in_array($needle, $haystack, true);
+```
+
+**5. `array_search` повертає 0 або false:**
+```php
+$arr = ['apple', 'banana', 'cherry'];
+$pos = array_search('apple', $arr); // повертає 0 (перший індекс)
+
+if ($pos) { /* не спрацює! 0 == false */ }
+if ($pos !== false) { /* правильно */ }
+```
+
+**6. Передача масиву за значенням у рекурсію:**
+```php
+// Кожен рекурсивний виклик отримує копію (COW) — при великих масивах
+// і глибокій рекурсії може з'їсти пам'ять. Краще передавати по посиланню
+// або використовувати ітеративний підхід.
+```
+
+**7. `count()` на не-масиві:**
+```php
+count(null);   // 0 — і deprecation warning у PHP 7.2+
+count(false);  // 0
+count("str");  // 1 — рядок вважається як один елемент
+```
+
+#### Міні-шпаргалка
+
+- `array_filter` зберігає ключі → `array_values()` якщо потрібна нумерація з 0
+- `array_merge` перезаписує значення, перенумеровує числові ключі; `+` — пріоритет першого
+- `in_array($v, $arr, true)` — завжди з `true` для strict
+- `array_search` повертає `0` для першого елемента → перевіряти `!== false`
+- `sort` скидає ключі; `asort` зберігає; `ksort` — за ключами
+- `count(null)` → 0 без помилки (тихо)
+
+</details>
+
+---
+
+<a id="19"></a>
+
+### 19. Як працює foreach у PHP, і що буде, якщо ітерувати рядок або модифікувати масив під час ітерації?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Як працює foreach:** у PHP 7+ foreach з масивом робить копію масиву (через COW) на початку ітерації і ітерує по ній. Оригінальний масив і його внутрішній вказівник не змінюються під час ітерації.
+
+```php
+$arr = [1, 2, 3];
+foreach ($arr as $v) {
+    $arr[] = $v * 10; // додаємо до оригіналу — foreach не побачить нові елементи
+    echo $v;          // 1 2 3 — ітерується по копії
+}
+print_r($arr); // [1, 2, 3, 10, 20, 30]
+```
+
+**Модифікація масиву через посилання:**
+```php
+$arr = [1, 2, 3];
+foreach ($arr as &$v) {
+    $v *= 2;   // foreach з & ітерує оригінал напряму, зміни видимі
+}
+unset($v);     // ОБОВ'ЯЗКОВО! Без цього $v — посилання на $arr[2]
+print_r($arr); // [2, 4, 6]
+```
+
+**Класична пастка без `unset($v)`:**
+```php
+$arr = [1, 2, 3];
+foreach ($arr as &$v) { /* нічого */ }
+// Тепер $v — посилання на $arr[2] (останній елемент)
+
+foreach ($arr as $v) {   // другий foreach без &
+    // Перша ітерація: $v = 1 → $arr[2] = 1 → масив стає [1, 2, 1]
+    // Друга:          $v = 2 → $arr[2] = 2 → масив стає [1, 2, 2]
+    // Третя:          $v = 2 → $arr[2] = 2 → масив залишається [1, 2, 2]
+}
+print_r($arr); // [1, 2, 2] — сюрприз!
+```
+
+**Ітерація рядка:** `foreach` не працює з рядком напряму — `TypeError`. Але рядок можна ітерувати посимвольно через `str_split` або прямий доступ по індексу:
+```php
+$str = "hello";
+
+// foreach ($str as $char) {} // TypeError: can not iterate over string
+
+foreach (str_split($str) as $char) {
+    echo $char; // h e l l o
+}
+
+// Або через for:
+for ($i = 0; $i < strlen($str); $i++) {
+    echo $str[$i];
+}
+```
+
+**`foreach` з об'єктами:** ітерує публічні властивості за замовчуванням; якщо об'єкт реалізує `Iterator` або `IteratorAggregate` — використовує їх методи.
+
+```php
+class Collection implements IteratorAggregate
+{
+    private array $items = [];
+
+    public function add(mixed $item): void { $this->items[] = $item; }
+
+    public function getIterator(): ArrayIterator
+    {
+        return new ArrayIterator($this->items);
+    }
+}
+
+$c = new Collection();
+$c->add('a'); $c->add('b');
+foreach ($c as $item) { echo $item; } // a b
+```
+
+#### Міні-шпаргалка
+
+- `foreach` ітерує по COW-копії масиву → зміни оригіналу під час ітерації не видимі (без `&`)
+- `foreach ($arr as &$v)` — ітерує оригінал; завжди `unset($v)` після циклу
+- Без `unset` після `&`-foreach → `$v` залишається посиланням → наступний `foreach` тихо псує масив
+- Рядок не ітерується foreach напряму → `str_split()` або `for` + індекс
+- Об'єкти: публічні властивості або `Iterator`/`IteratorAggregate`
+
+</details>
+
+---
+
+<a id="20"></a>
+
+### 20. Що означає складність алгоритму і чому це важливо в повсякденній PHP-розробці?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Складність алгоритму** — оцінка того, як зростає час виконання або використання пам'яті залежно від розміру вхідних даних `n`. Записується в нотації **Big O**.
+
+**Основні класи складності:**
+
+| Нотація | Назва | Приклад |
+|---|---|---|
+| O(1) | Константна | Доступ до елемента масиву по ключу, `isset()` |
+| O(log n) | Логарифмічна | Бінарний пошук, операції з B-Tree індексом |
+| O(n) | Лінійна | `in_array()`, `array_search()`, один прохід масиву |
+| O(n log n) | Лінійно-логарифмічна | `sort()`, `usort()` |
+| O(n²) | Квадратична | Вкладений foreach по одному масиву |
+| O(2ⁿ) | Експоненційна | Наївний обхід всіх підмножин |
+
+**Чому важливо в PHP-розробці:**
+
+*N+1 проблема* — найпоширеніший O(n²) у PHP:
+```php
+// O(n²) — для кожного поста окремий запит
+$posts = Post::all(); // 1 запит
+foreach ($posts as $post) {
+    echo $post->author->name; // N запитів! Lazy loading
+}
+
+// O(n) — один запит з eager loading
+$posts = Post::with('author')->get();
+foreach ($posts as $post) {
+    echo $post->author->name; // без запиту
+}
+```
+
+*`in_array` в циклі — O(n²):*
+```php
+$blocked = getBlockedIds(); // масив з 10000 елементів
+
+// O(n²): in_array — O(n), виконується n разів
+foreach ($users as $user) {
+    if (in_array($user->id, $blocked)) { ... }
+}
+
+// O(n): перетворити на hash map — lookup O(1)
+$blockedMap = array_flip($blocked); // [id => index]
+foreach ($users as $user) {
+    if (isset($blockedMap[$user->id])) { ... }
+}
+```
+
+*Конкатенація рядків у циклі:*
+```php
+// O(n²) у мовах де рядки незмінні; у PHP з COW — краще, але все одно
+$result = '';
+foreach ($items as $item) {
+    $result .= $item; // кожна операція може копіювати рядок
+}
+
+// O(n) — краще:
+$result = implode('', $items);
+```
+
+**Пам'ять O(n) vs O(1):** Generator замість `array_map` для великих наборів — O(1) пам'яті замість O(n).
+
+#### Міні-шпаргалка
+
+- O(1) — константа: `isset`, `array_key_exists`, доступ по ключу
+- O(n) — лінійна: `in_array`, `array_search`, один foreach
+- O(n²) — квадратична: вкладені foreach, N+1, `in_array` в циклі
+- `array_flip` → `isset` — заміна `in_array` в циклі з O(n²) на O(n)
+- N+1: `with('relation')` замість lazy loading
+- Generator замість масиву — O(1) пам'яті для потокового обчислення
+
+</details>
+
+---
+
+<a id="21"></a>
+
+### 21. Які структури даних ви знаєте і які використовували на практиці?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Базові структури та їх PHP-еквіваленти:**
+
+**Array (масив/хеш-таблиця)** — у PHP `array` це впорядкований словник. Доступ по ключу O(1), ітерація O(n). Використовую щодня: колекції, lookup tables, черги через `array_push`/`array_shift`.
+
+**Stack (стек)** — LIFO. У PHP: `array` + `array_push`/`array_pop` або `SplStack`:
+```php
+$stack = new SplStack();
+$stack->push('a');
+$stack->push('b');
+echo $stack->pop(); // 'b'
+```
+На практиці: обхід дерева DFS, undo-стек, парсинг виразів.
+
+**Queue (черга)** — FIFO. `array_push`/`array_shift` або `SplQueue`. На практиці: черга задач (але зазвичай RabbitMQ/Redis), BFS обхід.
+
+**Linked List** — PHP `SplDoublyLinkedList`. Рідко потрібен напряму — `array` з COW зазвичай достатній. Корисний коли часті вставки/видалення по середині без зміщення індексів.
+
+**Heap (пріоритетна черга)** — `SplMinHeap`/`SplMaxHeap`/`SplPriorityQueue`. Отримати мінімум/максимум за O(log n):
+```php
+$heap = new SplMinHeap();
+$heap->insert(5);
+$heap->insert(1);
+$heap->insert(3);
+echo $heap->extract(); // 1 — завжди мінімум
+```
+На практиці: планувальник задач за пріоритетом, алгоритм Дейкстри.
+
+**Tree (дерево)** — у PHP немає вбудованої реалізації; будується через об'єкти або рекурсивні масиви. На практиці: меню з необмеженою вкладеністю, категорії (Nested Set або Adjacency List у БД), DOM/XML обхід.
+
+**Graph (граф)** — представлення через матрицю суміжності (масив масивів) або список суміжності (масив масивів ключів). На практиці: dependency resolution (composer), маршрутизація.
+
+**Trie** — дерево префіксів. Рідко будують вручну в PHP; частіше Elasticsearch або Redis для автодоповнення.
+
+**Де я це використовував реально:**
+- Масив як lookup map (`array_flip`) — щодня
+- Рекурсивний обхід дерева категорій — часто в e-commerce
+- `SplPriorityQueue` для планувальника задач з пріоритетами
+- Черга через Redis List для фонових задач (замість `SplQueue`)
+- Stack для парсингу вкладених структур (шаблони, конфіги)
+
+#### Міні-шпаргалка
+
+- `array` — і список, і хеш-таблиця; O(1) по ключу
+- Stack: `array_push`/`array_pop` або `SplStack` — LIFO
+- Queue: `array_push`/`array_shift` або `SplQueue` — FIFO
+- `SplMinHeap`/`SplMaxHeap` — priority queue O(log n)
+- Tree — рекурсивні масиви або об'єкти; Nested Set для БД
+- SPL (`SplStack`, `SplQueue`, `SplHeap`) — вбудовані ефективні реалізації
+
+</details>
+
+---
+
+<a id="22"></a>
+
+### 22. У чому різниця між стеком і чергою як структурами даних?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Обидві структури — лінійні колекції з обмеженим доступом. Різниця — в порядку вилучення елементів.
+
+**Stack (стек) — LIFO (Last In, First Out):**
+
+Останній доданий елемент вилучається першим. Як стопка тарілок — кладеш зверху, береш зверху.
+
+```php
+$stack = [];
+array_push($stack, 'a'); // ['a']
+array_push($stack, 'b'); // ['a', 'b']
+array_push($stack, 'c'); // ['a', 'b', 'c']
+
+echo array_pop($stack);  // 'c' — останній доданий
+echo array_pop($stack);  // 'b'
+echo array_pop($stack);  // 'a'
+```
+
+Операції: `push` (додати зверху), `pop` (взяти зверху), `peek` (подивитись без вилучення) — всі O(1).
+
+**Queue (черга) — FIFO (First In, First Out):**
+
+Перший доданий елемент вилучається першим. Як черга в магазині — хто прийшов першим, той першим обслуговується.
+
+```php
+$queue = [];
+array_push($queue, 'a');  // ['a']
+array_push($queue, 'b');  // ['a', 'b']
+array_push($queue, 'c');  // ['a', 'b', 'c']
+
+echo array_shift($queue); // 'a' — перший доданий
+echo array_shift($queue); // 'b'
+echo array_shift($queue); // 'c'
+```
+
+Операції: `enqueue` (додати в кінець), `dequeue` (взяти з початку) — O(1) для `SplQueue`; `array_shift` — O(n) бо зсуває всі індекси!
+
+**Ефективна черга через `SplQueue`:**
+```php
+$queue = new SplQueue();
+$queue->enqueue('a');
+$queue->enqueue('b');
+echo $queue->dequeue(); // 'a' — O(1), не зсуває масив
+```
+
+**Де що застосовується:**
+
+| | Stack | Queue |
+|---|---|---|
+| Алгоритм обходу | DFS (глибина) | BFS (ширина) |
+| Парсинг | Дужки, вирази, XML | — |
+| Фонові задачі | Undo/redo | Task queue (Celery, RabbitMQ) |
+| Рекурсія | Implicit call stack | — |
+| Буферизація | — | Потоки, I/O буфер |
+
+#### Міні-шпаргалка
+
+- Stack — LIFO: `push`/`pop` з одного кінця; DFS, undo, парсинг
+- Queue — FIFO: `enqueue` в кінець, `dequeue` з початку; BFS, task queue
+- `array_pop` — O(1); `array_shift` — O(n) (зсуває масив)
+- `SplStack` і `SplQueue` — обидва O(1) для всіх операцій
+- Deque (double-ended queue) — `SplDoublyLinkedList`: обидва кінці O(1)
+
+</details>
+
+---
+
+<a id="23"></a>
+
+### 23. Що таке рекурсія, які в неї переваги, недоліки та типові сценарії використання?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Рекурсія** — функція що викликає саму себе, розбиваючи задачу на менші підзадачі того самого типу, поки не досягне базового випадку (base case).
+
+```php
+function factorial(int $n): int
+{
+    if ($n <= 1) return 1;        // base case
+    return $n * factorial($n - 1); // рекурсивний виклик
+}
+```
+
+**Переваги:**
+- Код читабельніший для задач з природньо рекурсивною структурою (дерева, графи)
+- Менше явного управління станом — стек викликів замінює ручний стек
+- Математична елегантність для divide-and-conquer алгоритмів
+
+**Недоліки:**
+- Кожен виклик — новий stack frame: при глибокій рекурсії переповнення стеку
+- PHP не має оптимізації хвостової рекурсії (tail-call optimization) — кожен рекурсивний виклик займає пам'ять
+- Складніше відлагоджувати ніж ітеративний варіант
+
+**PHP і глибина рекурсії:**
+```php
+// Без Xdebug — обмежений C-стеком (~несколько тысяч викликів)
+// З Xdebug — xdebug.max_nesting_level (default 256)
+function recurse(int $n): void
+{
+    recurse($n + 1); // Fatal error після 256 рівнів з Xdebug
+}
+```
+
+**Типові сценарії де рекурсія доцільна:**
+
+*Обхід дерева (меню, категорії):*
+```php
+function buildTree(array $items, int $parentId = 0): array
+{
+    $branch = [];
+    foreach ($items as $item) {
+        if ($item['parent_id'] === $parentId) {
+            $item['children'] = buildTree($items, $item['id']);
+            $branch[] = $item;
+        }
+    }
+    return $branch;
+}
+```
+
+*Обхід файлової системи:*
+```php
+function scanDir(string $path): array
+{
+    $result = [];
+    foreach (scandir($path) as $file) {
+        if ($file === '.' || $file === '..') continue;
+        $full = $path . '/' . $file;
+        $result[] = is_dir($full) ? scanDir($full) : $full;
+    }
+    return $result;
+}
+// Краще: RecursiveDirectoryIterator (вбудований, без ручної рекурсії)
+```
+
+*Merge sort, quick sort, binary search* — divide-and-conquer.
+
+**Хвостова рекурсія і перетворення на ітерацію:**
+
+PHP не оптимізує хвостову рекурсію, тому глибокі рекурсії краще перетворити на ітерацію з явним стеком:
+```php
+// Рекурсивний DFS → ітеративний DFS з явним стеком
+function dfs(array $graph, int $start): array
+{
+    $visited = [];
+    $stack   = [$start];
+
+    while (!empty($stack)) {
+        $node = array_pop($stack);
+        if (isset($visited[$node])) continue;
+        $visited[$node] = true;
+        foreach ($graph[$node] as $neighbor) {
+            $stack[] = $neighbor;
+        }
+    }
+    return array_keys($visited);
+}
+```
+
+#### Міні-шпаргалка
+
+- Рекурсія = функція викликає себе; обов'язковий base case
+- Переваги: читабельність для дерев/графів, менше стану
+- Недоліки: stack overflow при глибокій рекурсії; PHP без TCO
+- PHP + Xdebug: ліміт 256 рівнів за замовчуванням
+- Де доцільно: дерева категорій, файлова система, merge/quick sort
+- Глибока рекурсія → ітерація з явним масивом-стеком
+
+</details>
+
+---
+
+---
+
+<a id="24"></a>
+
+### 24. Як у PHP перехоплювати warning/error-повідомлення і коли це доцільно робити?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+PHP має кілька рівнів помилок: `E_ERROR`, `E_WARNING`, `E_NOTICE`, `E_DEPRECATED` тощо. За замовчуванням warnings і notices лише виводяться, не зупиняючи виконання. Перехоплення потрібне коли потрібно обробити помилку програмно замість виводу.
+
+**`set_error_handler`** — реєструє кастомний обробник для всіх E_* помилок (крім E_ERROR/E_PARSE — вони fatal):
+
+```php
+set_error_handler(function (int $errno, string $errstr, string $file, int $line): bool {
+    // true = PHP не обробляє помилку далі
+    // false = PHP обробляє як зазвичай
+    throw new \ErrorException($errstr, 0, $errno, $file, $line);
+});
+
+// Тепер будь-який warning стає виключенням:
+$fp = fopen('/nonexistent', 'r'); // Warning → ErrorException → catchable
+```
+
+Перетворення warnings на `ErrorException` — стандартна практика в production: помилку не виводить у HTML, а логує через обробник винятків.
+
+**`@` оператор (error suppression)** — пригнічує помилки для одного виразу:
+```php
+$val = @file_get_contents('/maybe/exists'); // Warning придушений
+if ($val === false) { /* обробляємо явно */ }
+```
+Використовувати дуже обережно: `@` пригнічує всі помилки включно з фатальними синтаксичними помилками у eval. Сповільнює виконання (PHP все одно генерує помилку). Краща альтернатива — `file_exists()` перед відкриттям або перевірка повернутого значення.
+
+**`set_exception_handler`** — глобальний обробник для незловлених винятків:
+```php
+set_exception_handler(function (\Throwable $e): void {
+    error_log($e->getMessage() . "\n" . $e->getTraceAsString());
+    http_response_code(500);
+    echo json_encode(['error' => 'Internal Server Error']);
+    exit(1);
+});
+```
+
+**`register_shutdown_function`** — виконується при завершенні скрипту, включно з fatal errors:
+```php
+register_shutdown_function(function (): void {
+    $error = error_get_last();
+    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR])) {
+        // логування fatal error
+        error_log("Fatal: {$error['message']} in {$error['file']}:{$error['line']}");
+    }
+});
+```
+
+**`try/catch(E_*)` НЕ існує** — E_WARNING не є винятком і не ловиться через `catch`. Єдиний спосіб зловити warning — через `set_error_handler` + `ErrorException`.
+
+**Коли перехоплювати:**
+- Виклики зовнішніх функцій що можуть видати warning (filesystem, curl, image functions)
+- Глобальний обробник у bootstrap для перетворення warnings → exceptions
+- Shutdown handler для логування fatal errors
+- `@` — тільки коли перевірка значення повернення достатня і немає кращого API
+
+**Коли НЕ варто:** не `@` замість правильної перевірки; не пригнічувати warnings що сигналізують про реальні проблеми.
+
+#### Міні-шпаргалка
+
+- `set_error_handler` → перехопити E_WARNING/E_NOTICE як `ErrorException`
+- `set_exception_handler` → глобальний catch для незловлених винятків
+- `register_shutdown_function` + `error_get_last()` → fatal errors
+- `@` — пригнічує помилку; повільніше; уникати якщо є кращий спосіб
+- E_WARNING не ловиться `catch` напряму — тільки через `set_error_handler`
+
+</details>
+
+---
+
+<a id="25"></a>
+
+### 25. Як ви розумієте exception flow у PHP і як правильно будувати обробку винятків у застосунку?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Ієрархія Throwable в PHP:**
+```
+Throwable (interface)
+├── Error (PHP runtime errors)
+│   ├── TypeError
+│   ├── ValueError
+│   ├── ArithmeticError
+│   │   └── DivisionByZeroError
+│   ├── ParseError
+│   └── ...
+└── Exception
+    ├── RuntimeException
+    │   ├── InvalidArgumentException (логічно тут)
+    │   └── ...
+    ├── LogicException
+    │   ├── InvalidArgumentException
+    │   ├── DomainException
+    │   └── BadMethodCallException
+    └── ...
+```
+
+`Error` — для PHP-рушійних помилок (TypeError, undefined method). `Exception` — для бізнес/застосункових винятків. `catch (\Throwable $e)` ловить обидва.
+
+**Exception flow:**
+```php
+function divide(int $a, int $b): float
+{
+    if ($b === 0) throw new \DivisionByZeroError("Cannot divide by zero");
+    return $a / $b;
+}
+
+try {
+    $result = divide(10, 0);
+} catch (\DivisionByZeroError $e) {
+    // специфічний catch — ловить тільки цей тип
+    echo "Math error: " . $e->getMessage();
+} catch (\RuntimeException | \LogicException $e) {
+    // union catch (PHP 8.0+)
+    echo "App error: " . $e->getMessage();
+} catch (\Throwable $e) {
+    // fallback — ловить все
+    echo "Unexpected: " . $e->getMessage();
+} finally {
+    // виконується завжди — з exception чи без
+    // навіть якщо catch робить return або rethrow
+    cleanupResources();
+}
+```
+
+**Правила побудови ієрархії винятків у застосунку:**
+
+1. **Доменні винятки** — кожен шар має свої:
+```php
+// Domain layer
+class InsufficientFundsException extends \DomainException {}
+class UserNotFoundException extends \RuntimeException {}
+
+// Infrastructure layer
+class DatabaseConnectionException extends \RuntimeException {}
+class PaymentGatewayException extends \RuntimeException {}
+
+// Application layer ловить domain + перетворює infra:
+try {
+    $this->paymentService->charge($amount);
+} catch (PaymentGatewayException $e) {
+    throw new PaymentFailedException("Payment failed", 0, $e); // wrap + preserve cause
+}
+```
+
+2. **Не ковтати винятки мовчки:**
+```php
+// Погано:
+try {
+    $this->sendEmail($user);
+} catch (\Exception $e) {
+    // нічого — виняток зник
+}
+
+// Добре:
+try {
+    $this->sendEmail($user);
+} catch (\Exception $e) {
+    $this->logger->error('Email failed', ['exception' => $e]);
+    // або rethrow якщо критично
+}
+```
+
+3. **Catch конкретного типу, не `\Exception` завжди:**
+```php
+// Погано — ловить все включно з TypeError що є багом:
+catch (\Exception $e) { ... }
+
+// Добре — ловить тільки очікувані:
+catch (UserNotFoundException $e) { return response()->notFound(); }
+catch (InsufficientFundsException $e) { return response()->unprocessable(); }
+```
+
+4. **`finally` для cleanup**, не для логіки що залежить від успіху:
+```php
+$connection = $this->db->connect();
+try {
+    // робота з БД
+} finally {
+    $connection->close(); // виконається завжди
+}
+```
+
+5. **Rethrow зі збереженням причини (`$previous`):**
+```php
+catch (PDOException $e) {
+    throw new DatabaseException("Query failed", 0, $e); // $e як $previous
+}
+// У логах: DatabaseException caused by PDOException — повний ланцюг
+```
+
+**HTTP-шар і маппінг винятків:**
+
+У web-застосунку зручно мати центральний обробник що перетворює домен-винятки на HTTP-відповіді:
+```php
+// Laravel ExceptionHandler або власний middleware:
+match (true) {
+    $e instanceof NotFoundException         => response()->json(['error' => 'Not Found'], 404),
+    $e instanceof ValidationException       => response()->json($e->errors(), 422),
+    $e instanceof AuthenticationException  => response()->json(['error' => 'Unauthorized'], 401),
+    default                                 => response()->json(['error' => 'Server Error'], 500),
+};
+```
+
+#### Міні-шпаргалка
+
+- `Throwable` = `Error` (рушій) + `Exception` (застосунок); `catch(\Throwable)` — ловить все
+- `finally` — виконується завжди (навіть після return/throw в catch)
+- Специфічний `catch` перед загальним; ніколи не ловити `\Exception` там де очікується `\Throwable`
+- Не ковтати мовчки — мінімум `logger->error()`
+- Rethrow з `$previous` — зберігає ланцюг причин
+- Доменні винятки як явний API: `UserNotFoundException`, `InsufficientFundsException`
+- HTTP-шар: центральний mapper виняток → HTTP-статус
+
+</details>
+
+---
+
+<a id="26"></a>
+
+### 26. Що таке витоки пам'яті в PHP, у яких сценаріях вони можливі і як їх виявляти?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Витік пам'яті (memory leak)** — пам'ять виділена але не звільнена після того як більше не потрібна. У PHP з garbage collector (GC) це переважно означає об'єкти що залишаються доступними через посилання, хоча логічно більше не потрібні.
+
+PHP звільняє пам'ять через **reference counting**: коли `refcount` змінної падає до 0 — пам'ять звільняється. Проблема виникає при **циклічних посиланнях** де refcount ніколи не стає 0:
+
+```php
+class Node {
+    public ?Node $next = null;
+    public array $data;
+}
+
+$a = new Node();
+$b = new Node();
+$a->next = $b;
+$b->next = $a; // циклічне посилання!
+
+unset($a, $b);
+// refcount обох > 0 — GC cycle collector має знайти і прибрати
+// але до GC-запуску — пам'ять не звільнена
+```
+
+PHP 5.3+ має cycle collector що знаходить такі цикли, але він не запускається після кожної операції — тільки коли буфер накопичить достатньо підозрілих об'єктів.
+
+**Типові сценарії витоків у PHP:**
+
+**1. Накопичення в масивах без очищення (найчастіший):**
+```php
+$log = [];
+foreach (range(1, 1_000_000) as $i) {
+    $log[] = "processed item $i"; // масив росте — пам'ять не звільняється
+}
+// Рішення: unset($log) або обробляти батчами
+```
+
+**2. Статичні властивості класів як глобальний кеш:**
+```php
+class Registry {
+    private static array $instances = [];
+
+    public static function register(string $key, object $obj): void {
+        self::$instances[$key] = $obj; // живе весь час виконання скрипту
+    }
+}
+// Всі зареєстровані об'єкти ніколи не видаляються
+```
+
+**3. Довгоживучі процеси (workers, CLI):**
+У звичайному HTTP-запиті пам'ять звільняється в кінці. У CLI-воркері або Swoole/RoadRunner процес живе годинами — витоки накопичуються:
+```php
+while (true) {
+    $job = $queue->pop();
+    process($job);
+    // якщо process() накопичує стан у статичних змінних або глобалах — витік
+}
+```
+
+**4. Event listeners і callbacks що тримають closures:**
+```php
+$heavyObject = new HeavyObject();
+
+$emitter->on('event', function () use ($heavyObject) {
+    // closure тримає посилання на $heavyObject
+    // якщо $emitter живе довго — $heavyObject не звільниться
+});
+```
+
+**5. Незакриті ресурси:**
+```php
+// Якщо fopen без fclose — file descriptor витікає
+$fp = fopen('file.txt', 'r');
+// ... обробка без fclose()
+// У PHP при завершенні скрипту закриються, але в довгоживучому процесі — ні
+```
+
+**Виявлення:**
+
+```php
+// Поточне використання пам'яті
+echo memory_get_usage();       // байти, без PHP overhead
+echo memory_get_usage(true);   // з overhead (реально зарезервовано)
+echo memory_get_peak_usage();  // пік за весь час виконання
+
+// В циклі — відстежувати ріст:
+for ($i = 0; $i < 1000; $i++) {
+    processItem($i);
+    if ($i % 100 === 0) {
+        echo "Memory: " . round(memory_get_usage() / 1024 / 1024, 2) . " MB\n";
+    }
+}
+// Якщо пам'ять стабільно зростає — є витік
+```
+
+**Інструменти:**
+- **Xdebug profiler** — snapshot пам'яті, call graph
+- **Blackfire** — профілювання з heap analysis
+- **php-meminfo** розширення — дамп живих об'єктів у пам'яті
+- **Valgrind + PHP** — для витоків на рівні C-розширень
+
+**Як запобігати:**
+- `unset()` великих змінних після використання в довгих циклах
+- Уникати статичних кешів без обмеження розміру
+- `gc_collect_cycles()` вручну в критичних місцях довгоживучих процесів
+- У воркерах: перезапускати процес після N ітерацій як safety net
+
+#### Міні-шпаргалка
+
+- PHP звільняє пам'ять через refcount; cycle collector для циклічних посилань
+- Основні причини: накопичення в масивах, статичні кеші, closures в listeners, незакриті ресурси
+- В довгоживучих процесах (CLI worker, Swoole) витоки критичні — HTTP-запит очищає пам'ять сам
+- `memory_get_usage()` / `memory_get_peak_usage()` — діагностика в коді
+- Інструменти: Xdebug, Blackfire, php-meminfo
+- `unset()` + `gc_collect_cycles()` + обмеження розміру кешів
+
+</details>
+
+---
+
+<a id="27"></a>
+
+### 27. Як у PHP працює garbage collector і коли має сенс взаємодіяти з ним явно?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+PHP управляє пам'яттю на двох рівнях.
+
+**Рівень 1 — Reference counting (основний механізм).** Кожен zval (внутрішній контейнер значення) має лічильник `refcount`. Коли змінна присвоюється або передається — `refcount++`. Коли змінна виходить зі scope або викликається `unset()` — `refcount--`. Коли `refcount` досягає 0 — пам'ять звільняється **негайно**, без GC:
+
+```php
+$a = new stdClass(); // refcount=1
+$b = $a;             // refcount=2
+unset($a);           // refcount=1
+unset($b);           // refcount=0 → пам'ять звільнена миттєво
+```
+
+Reference counting — дуже ефективний: більшість об'єктів звільняються одразу, без паузи.
+
+**Рівень 2 — Cycle Collector (GC).** Reference counting не може впоратись з циклічними посиланнями — де два об'єкти посилаються один на одного, і refcount обох ніколи не падає до 0:
+
+```php
+$a = new stdClass();
+$b = new stdClass();
+$a->ref = $b;
+$b->ref = $a;
+unset($a, $b);
+// refcount обох = 1 (один від одного) → refcounting не звільнить
+// → потрапляють у GC root buffer
+```
+
+Cycle collector — алгоритм на основі `Concurrent Cycle Collection in Reference Counted Systems` (Bacon & Rajan). Він відстежує «підозрілі» zval-и (ті що зменшили refcount але не до 0) у **root buffer**. Коли буфер накопичує 10 000 елементів — GC запускається автоматично, обходить граф посилань і знаходить ізольовані цикли.
+
+**Управління GC явно:**
+
+```php
+// Перевірити статус
+var_dump(gc_enabled()); // bool(true) за замовчуванням
+
+// Вимкнути GC (рідко потрібно)
+gc_disable();
+
+// Увімкнути
+gc_enable();
+
+// Примусовий запуск cycle collector
+$freed = gc_collect_cycles(); // повертає кількість звільнених zval-ів
+echo "Freed: $freed cycles\n";
+
+// Статистика
+print_r(gc_status()); // PHP 8.1+: runs, collected, threshold тощо
+```
+
+**Коли взаємодіяти з GC явно:**
+
+*Вимкнути GC для швидкого batch-processing без циклічних посилань:*
+```php
+gc_disable();
+// Обробка мільйона простих рядків/чисел без об'єктів
+// GC тут тільки зайвий overhead — немає циклів для збору
+foreach ($largeDataset as $row) {
+    processSimple($row);
+}
+gc_enable();
+```
+
+*Примусовий `gc_collect_cycles()` у довгоживучому воркері після важкого циклу:*
+```php
+foreach (getBatch() as $item) {
+    $result = buildComplexObjectGraph($item); // може створювати цикли
+    persist($result);
+    unset($result);
+}
+gc_collect_cycles(); // прибрати накопичені цикли між батчами
+```
+
+*Вимкнути якщо знаєте що циклів немає:* серіалізація/десеріалізація простих DTO, генерація CSV, масові INSERT без ORM-об'єктів.
+
+**Коли НЕ варто взаємодіяти:** у звичайних HTTP-запитах (короткоживучі процеси) — GC сам впорається; примусовий `gc_collect_cycles()` без потреби — марна трата часу.
+
+#### Міні-шпаргалка
+
+- **refcount** — основний механізм; звільнення миттєве при refcount=0
+- **Cycle collector** — для циклічних посилань; запускається при 10 000 підозрілих об'єктів
+- `gc_collect_cycles()` — примусовий запуск; повертає кількість зібраних
+- `gc_disable()` / `gc_enable()` — вимкнути для batch без циклів (прискорення)
+- `gc_status()` (PHP 8.1+) — статистика запусків і зібраних циклів
+- У коротких HTTP-запитах — не чіпати; актуально для CLI-воркерів і Swoole
+
+</details>
+
+---
+
+<a id="28"></a>
+
+### 28. Як у PHP очищати або вивільняти пам'ять у довгоживучих процесах?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+У звичайному HTTP-запиті PHP очищає всю пам'ять після завершення скрипту. У довгоживучих процесах (CLI воркери, Swoole, RoadRunner, ReactPHP) пам'ять накопичується між ітераціями — кожен «запит» чи «задача» обробляється в одному процесі без перезапуску.
+
+**Основні техніки:**
+
+**1. `unset()` — явне видалення посилання:**
+```php
+while ($job = $queue->pop()) {
+    $result = processJob($job);
+    saveResult($result);
+
+    unset($job, $result); // видаляє посилання → refcount падає → пам'ять звільняється
+}
+```
+`unset()` не гарантує негайного звільнення якщо є інші посилання. Але для локальних змінних — миттєво.
+
+**2. Очищення колекцій між ітераціями:**
+```php
+$cache = [];
+foreach (getBatch(1000) as $item) {
+    $cache[$item->id] = transform($item);
+}
+processBatch($cache);
+unset($cache); // або $cache = [] — звільнити всі елементи
+```
+
+**3. `gc_collect_cycles()` після важких блоків:**
+```php
+while (true) {
+    processBatch();
+    gc_collect_cycles(); // прибрати циклічні посилання що накопичились
+    sleep(1);
+}
+```
+
+**4. Контроль пам'яті і перезапуск:**
+
+Найнадійніша стратегія для production — перезапускати воркер після N задач або при досягненні порогу пам'яті:
+```php
+$processed = 0;
+$memoryLimit = 128 * 1024 * 1024; // 128 MB
+
+while ($job = $queue->pop()) {
+    processJob($job);
+    $processed++;
+
+    if ($processed >= 1000 || memory_get_usage(true) > $memoryLimit) {
+        // Supervisord або pm2 перезапустить процес
+        exit(0);
+    }
+}
+```
+Supervisord / systemd автоматично перезапустить процес. Це простіше і надійніше ніж намагатись ідеально очищати пам'ять.
+
+**5. Weakreference — посилання що не утримує об'єкт:**
+```php
+$obj = new HeavyObject();
+$weak = WeakReference::create($obj);
+
+// $weak не збільшує refcount — не перешкоджає GC
+unset($obj);
+var_dump($weak->get()); // NULL — об'єкт вже звільнений
+```
+Корисно для кешів де не потрібно утримувати об'єкт живим якщо на нього немає інших посилань.
+
+**6. `WeakMap` (PHP 8.0+) — кеш без утримання ключів:**
+```php
+$cache = new WeakMap();
+$obj   = new stdClass();
+$cache[$obj] = expensiveComputation($obj);
+
+unset($obj);
+// $obj звільнений → запис у WeakMap автоматично видалений
+// WeakMap не утримує ключі-об'єкти живими
+```
+Ідеально для кешів метаданих про об'єкти (наприклад, в ORM або DI-контейнері).
+
+**7. Уникати статичних кешів без обмеження:**
+```php
+class QueryCache {
+    private static array $cache = []; // без обмеження — росте вічно
+
+    // Додати LRU або TTL:
+    private static array $cache = [];
+    private static int $maxSize = 500;
+
+    public static function set(string $key, mixed $val): void {
+        if (count(self::$cache) >= self::$maxSize) {
+            array_shift(self::$cache); // видалити найстаріший
+        }
+        self::$cache[$key] = $val;
+    }
+}
+```
+
+**8. Закривати ресурси явно:**
+```php
+$fp = fopen('large.csv', 'r');
+try {
+    while (($line = fgets($fp)) !== false) {
+        process($line);
+    }
+} finally {
+    fclose($fp); // явно закрити — не чекати GC
+}
+```
+
+**Моніторинг у воркері:**
+```php
+$startMemory = memory_get_usage(true);
+// ... обробка ...
+$delta = memory_get_usage(true) - $startMemory;
+if ($delta > 1024 * 1024) { // > 1MB за ітерацію
+    $this->logger->warning("Memory growing: +{$delta} bytes per iteration");
+}
+```
+
+#### Міні-шпаргалка
+
+- `unset($var)` — видаляє посилання; refcount → 0 → миттєве звільнення
+- `gc_collect_cycles()` — після важких блоків для прибирання циклів
+- Перезапуск після N ітерацій або при перевищенні порогу пам'яті — найнадійніший підхід
+- `WeakReference` — посилання без утримання; `WeakMap` — кеш що не заважає GC
+- Статичні кеші — обмежувати розмір (LRU або FIFO)
+- Явно закривати ресурси (`fclose`, `curl_close`) у `finally`
+- `memory_get_usage(true)` — моніторити ріст між ітераціями
+
+</details>
+
+---
+
+<a id="29"></a>
+
+### 29. Що таке opcode, як він пов'язаний із виконанням PHP-коду і чому це важливо для продуктивності?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Opcode (operation code)** — інструкція для віртуальної машини Zend Engine. PHP не виконує вихідний код напряму — він проходить кілька етапів компіляції:
+
+```
+PHP-код (source)
+      ↓
+  Lexer (tokenizer) — розбиває текст на токени (T_ECHO, T_STRING, T_WHITESPACE...)
+      ↓
+  Parser — будує AST (Abstract Syntax Tree)
+      ↓
+  Compiler — перетворює AST на масив opcodes (зберігається в op_array)
+      ↓
+  Zend VM — виконує opcodes один за одним
+```
+
+**Приклад:** `echo "Hello " . $name;` компілюється приблизно у такі opcodes:
+```
+FETCH_R        $name
+CONCAT         "Hello ", $name → temp
+ECHO           temp
+```
+
+**Чому це важливо для продуктивності:**
+
+Лексинг + парсинг + компіляція — це робота що виконується **при кожному запиті** якщо немає кешування. Для великого фреймворку (Laravel, Symfony) з сотнями файлів — це десятки мілісекунд тільки на підготовку до виконання коду.
+
+Саме тому існує OPcache: зберігає скомпільовані op_array у shared memory і пропускає всі кроки до Zend VM при наступних запитах.
+
+**`php -r` і `phpdbg`** дозволяють переглянути opcodes:
+```bash
+php -d vld.active=1 -d vld.execute=0 script.php  # через VLD розширення
+```
+
+**Кількість opcodes ≈ складність коду.** Менше opcodes — менше роботи для VM. Звідси практичні наслідки:
+- `isset($arr['key'])` — 2 opcodes; `array_key_exists('key', $arr)` — ~5 opcodes (function call overhead)
+- `echo $a . $b . $c` — ефективніше ніж `echo $a; echo $b; echo $c;`
+- Статичні методи мають трохи менший overhead ніж instance-методи (без `$this` lookup)
+
+#### Міні-шпаргалка
+
+- PHP source → Lexer → Parser → AST → Compiler → opcodes → Zend VM
+- Opcode = інструкція для Zend VM (аналог байткоду JVM)
+- Компіляція в opcodes відбувається при кожному запиті без OPcache
+- OPcache кешує op_array — пропускає lexer/parser/compiler
+- `isset` < `array_key_exists` по кількості opcodes; function call — overhead
+
+</details>
+
+---
+
+<a id="30"></a>
+
+### 30. Що таке OPcache і як він працює в PHP?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**OPcache** — вбудоване PHP-розширення (з PHP 5.5, за замовчуванням увімкнено) що зберігає скомпільовані opcodes у **shared memory** між процесами. При наступному запиті PHP бере готовий op_array з кешу і одразу передає у Zend VM — без повторного lexing/parsing/compilation.
+
+**Схема роботи:**
+
+```
+Перший запит (cache miss):
+  PHP file → Lexer → Parser → Compiler → op_array
+                                              ↓
+                                    Записати в shared memory (OPcache)
+                                              ↓
+                                          Zend VM
+
+Наступні запити (cache hit):
+  PHP file → Перевірити mtime (чи змінився файл) → Zend VM
+                       ↑
+               Читати з shared memory
+```
+
+**Ключові налаштування в `php.ini`:**
+```ini
+opcache.enable=1
+opcache.memory_consumption=256        ; MB для shared memory
+opcache.max_accelerated_files=20000   ; макс кількість файлів у кеші
+opcache.revalidate_freq=60            ; перевіряти mtime кожні N секунд (0 = завжди)
+opcache.validate_timestamps=1         ; перевіряти чи змінився файл (0 = ніколи)
+opcache.save_comments=1               ; зберігати docblock (потрібно для анотацій)
+```
+
+**Production vs Development:**
+
+У **production** — `validate_timestamps=0` (ніколи не перевіряти файли) + ручне скидання кешу при deploy:
+```bash
+php -r "opcache_reset();"
+# або через HTTP-endpoint:
+# opcache_reset() у спеціальному захищеному endpoint
+```
+
+У **development** — `validate_timestamps=1`, `revalidate_freq=0` (перевіряти при кожному запиті) або повністю вимкнути OPcache щоб зміни коду одразу враховувались.
+
+**Preloading (PHP 7.4+):**
+
+```ini
+opcache.preload=/var/www/preload.php
+opcache.preload_user=www-data
+```
+
+`preload.php` завантажує файли фреймворку при старті PHP-FPM — вони компілюються один раз і залишаються у пам'яті назавжди без перевірки файлів:
+```php
+// preload.php
+$files = glob('/var/www/vendor/laravel/framework/src/**/*.php');
+foreach ($files as $file) {
+    opcache_compile_file($file);
+}
+```
+Зменшує memory_consumption на кожен worker-процес (preloaded файли shared між усіма), прискорює перший запит.
+
+**Перевірка статусу:**
+```php
+print_r(opcache_get_status());
+// hits, misses, memory_usage, interned_strings_usage...
+```
+
+**Важливо при deploy:** якщо не скинути OPcache після deploy — старий код виконується до закінчення `revalidate_freq`. Стандартне рішення: `opcache_reset()` у deploy-скрипті або rolling restart PHP-FPM workers.
+
+#### Міні-шпаргалка
+
+- OPcache зберігає скомпільовані opcodes у shared memory між процесами
+- Cache hit → пропуск lexer/parser/compiler → ~2-5x швидше
+- Production: `validate_timestamps=0` + `opcache_reset()` при deploy
+- Development: `validate_timestamps=1`, `revalidate_freq=0`
+- Preloading (7.4+) — фреймворк у пам'яті при старті FPM
+- `opcache_get_status()` — hit rate, використання пам'яті
+
+</details>
+
+---
+
+<a id="31"></a>
+
+### 31. Що таке JIT у PHP і які задачі він реально допомагає вирішувати?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**JIT (Just-In-Time compiler)** — з'явився у PHP 8.0 як частина OPcache. Замість того щоб Zend VM інтерпретував opcodes один за одним, JIT компілює **гарячий код** (той що виконується часто) прямо у нативний машинний код процесора і виконує його напряму — без VM-overhead.
+
+**Схема без JIT:**
+```
+opcodes → Zend VM (інтерпретація кожного opcode) → CPU
+```
+
+**Схема з JIT:**
+```
+opcodes → JIT compiler → native machine code → CPU (напряму)
+```
+
+**Типи JIT у PHP:**
+
+`opcache.jit` визначається 4-значним числом або ім'ям:
+- `off` — вимкнено
+- `tracing` (рекомендований) — компілює «гарячі» трасси виконання; ефективніший для реального коду
+- `function` — компілює цілі функції; простіший, менш агресивний
+
+```ini
+opcache.jit=tracing
+opcache.jit_buffer_size=64M   ; пам'ять для JIT-скомпільованого коду
+```
+
+**Де JIT дійсно допомагає:**
+
+JIT прискорює **CPU-bound** задачі — де процесор виконує багато обчислень без очікування I/O:
+- Математичні розрахунки (обробка зображень, рендеринг, симуляції)
+- Парсинг і трансформація великих наборів даних у пам'яті
+- Генерація звітів з важкою агрегацією
+- Benchmark-показники: 2-3x прискорення на чисто обчислювальних задачах
+
+**Де JIT НЕ допомагає (більшість типових PHP-застосунків):**
+
+Типовий web-запит проводить 90%+ часу в **I/O**: запити до БД, Redis, HTTP-виклики. CPU-код у цьому сценарії займає мізерний відсоток. JIT не може прискорити очікування відповіді від MySQL:
+
+```
+Типовий Laravel-запит:
+  Bootstrap + routing:  ~5ms  (CPU — JIT допоможе трохи)
+  DB queries:          ~50ms  (I/O — JIT не допоможе)
+  Redis:               ~5ms   (I/O — JIT не допоможе)
+  Response building:   ~3ms   (CPU — JIT допоможе трохи)
+  Загалом: ~63ms → JIT може дати ~62ms — непомітно
+```
+
+Реальні benchmark-и Laravel/Symfony з JIT показують 5-15% покращення в найкращому випадку — значно менше ніж маркетингові заяви.
+
+**JIT і OPcache:** JIT є частиною OPcache і вимагає його. Без OPcache JIT не працює.
+
+**Коли реально варто включати JIT:**
+- CLI-скрипти з важкою математикою або обробкою даних
+- Генерація зображень (GD, Imagick pipeline без системних викликів)
+- Кастомні парсери/компілятори написані на PHP
+- PHP як заміна Python/Ruby для data processing скриптів
+
+**Debugging і JIT:** Xdebug вимикає JIT автоматично — JIT і step-debugger несумісні.
+
+#### Міні-шпаргалка
+
+- JIT компілює гарячий PHP-код у нативний машинний код — без VM-overhead
+- Частина OPcache (PHP 8.0+); потребує `opcache.jit_buffer_size`
+- `tracing` — рекомендований режим; `function` — простіший
+- Ефективний для **CPU-bound**: математика, парсинг, трансформація даних
+- **Не допомагає** I/O-bound застосункам (типовий Laravel/Symfony web): 5-15% в найкращому випадку
+- Xdebug вимикає JIT — несумісні при step-debugging
+
+</details>
+
+---
+
+<a id="32"></a>
+
+### 32. Які інструменти для профілювання та аналізу продуктивності PHP-коду ви використовували на практиці?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Xdebug Profiler** — генерує cachegrind-файл з деталями кожного виклику функції: час виконання, кількість викликів, inclusive/exclusive час. Аналізується через KCachegrind (Linux) або QCachegrind (Mac/Windows).
+
+```ini
+; php.ini
+xdebug.mode=profile
+xdebug.output_dir=/tmp/xdebug
+xdebug.profiler_output_name=cachegrind.out.%p.%t
+```
+
+Запускається через `XDEBUG_PROFILE=1` у GET/cookie або завжди якщо `xdebug.start_with_request=yes`. Файл відкривається у KCachegrind — видно call graph, де найбільше часу.
+
+**Blackfire** — SaaS-профілювач від Symfony/Platform.sh. Найзручніший у практичному використанні:
+- Браузерний extension або CLI: `blackfire run php script.php`
+- Показує flame graph, call graph, порівняння між двома профілями
+- Assertions — можна написати перевірку "виклик БД < 10" і вона буде частиною CI
+- Мінімальний overhead (< 1% у production sampling mode)
+- Інтегрується з GitHub Actions, GitLab CI
+
+**Tideways** — схожий на Blackfire, орієнтований на continuous profiling у production: збирає 1% запитів постійно, показує перформанс-рядки в часі. Корисний для виявлення регресій після deploy.
+
+**SPX (Simple PHP eXtension)** — безкоштовна альтернатива Blackfire для self-hosted:
+```ini
+spx.enabled=1
+spx.http_enabled=1
+spx.http_key="my_secret_key"
+```
+Веб-інтерфейс за `?SPX_KEY=my_secret_key&SPX_ENABLED=1`. Flame graph без SaaS.
+
+**`microtime(true)` для точкового вимірювання** — найпростіший спосіб:
+```php
+$start = microtime(true);
+$result = expensiveOperation();
+$elapsed = microtime(true) - $start;
+echo sprintf("%.4f ms", $elapsed * 1000);
+```
+
+**Laravel Telescope / Debugbar** — для Laravel-проєктів:
+- Telescope: логує всі запити, SQL-запити, queue jobs, exceptions у БД; для dev і staging
+- Debugbar: inline у браузері — SQL з часом виконання, час рендерингу, пам'ять
+
+**`EXPLAIN` у БД — не PHP-інструмент але частина профілювання:** найчастіше bottleneck не в PHP а в SQL. `EXPLAIN ANALYZE` на повільних запитах виявляє full table scan, відсутні індекси.
+
+**Практичний workflow:**
+1. Зафіксувати проблему: `microtime` або APM (New Relic, Datadog) показав повільний endpoint
+2. Blackfire або Xdebug Profiler — знайти гарячу функцію (flame graph)
+3. `EXPLAIN` — якщо проблема в SQL
+4. Верифікувати виправлення: порівняти два Blackfire профілі до/після
+
+#### Міні-шпаргалка
+
+- **Xdebug Profiler** — cachegrind файл + KCachegrind; детальний call graph
+- **Blackfire** — flame graph, порівняння профілів, CI assertions; найзручніший
+- **Tideways** — continuous profiling у production (1% sampling)
+- **SPX** — безкоштовний self-hosted flame graph
+- `microtime(true)` — точкові вимірювання без інструментів
+- **Laravel Debugbar/Telescope** — SQL + час для Laravel
+- Workflow: APM → flame graph → SQL EXPLAIN → benchmark до/після
+
+</details>
+
+---
+
+<a id="33"></a>
+
+### 33. Що ви знаєте про статичний аналіз коду в PHP і які інструменти використовували?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Статичний аналіз** — перевірка коду без його виконання. Аналізатор читає вихідний код, будує граф типів і потоку виконання, і знаходить помилки що проявляться тільки в runtime: невідповідність типів, звернення до null, невизначені змінні, недосяжний код.
+
+**PHPStan** — найпопулярніший статичний аналізатор PHP. Має 10 рівнів (0–9):
+- Рівень 0: базові помилки (невизначені класи, методи)
+- Рівень 5: перевірка типів параметрів і повернень
+- Рівень 9: максимальний — mixed заборонений, всі типи мають бути явними
+
+```bash
+composer require --dev phpstan/phpstan
+vendor/bin/phpstan analyse src --level=8
+```
+
+`phpstan.neon` конфіг:
+```yaml
+parameters:
+    level: 8
+    paths:
+        - src
+    ignoreErrors:
+        - '#Call to an undefined method [a-zA-Z0-9\\_]+::someMethod\(\)#'
+    checkMissingIterableValueType: false
+```
+
+**Psalm** — альтернатива PHPStan від Vimeo. Акцент на immutability, taint analysis (відстеження небезпечних даних від input до SQL/HTML), рівні 1–8 (зворотній порядок — 1 найсуворіший):
+```bash
+vendor/bin/psalm --show-info=true
+```
+Psalm сильніший у виявленні security-проблем (SQL injection через taint tracking).
+
+**Rector** — автоматичний рефакторинг і оновлення коду. Не просто знаходить — виправляє:
+```bash
+composer require --dev rector/rector
+vendor/bin/rector process src --dry-run  # показати що зміниться
+vendor/bin/rector process src            # застосувати
+```
+
+Правила Rector:
+```php
+// rector.php
+return RectorConfig::configure()
+    ->withPaths([__DIR__ . '/src'])
+    ->withPhpSets(php82: true)           // мігрувати на PHP 8.2 синтаксис
+    ->withSets([LaravelSetList::LARAVEL_110]); // Laravel-специфічні правила
+```
+Автоматично: `strpos() !== false` → `str_contains()`, `array()` → `[]`, старі анотації → typed properties.
+
+**PHP_CodeSniffer (PHPCS)** — перевірка coding standards (PSR-12, PER Coding Style):
+```bash
+vendor/bin/phpcs --standard=PSR12 src/
+vendor/bin/phpcbf src/  # автоматичне виправлення форматування
+```
+
+**PHP-CS-Fixer** — альтернатива PHPCS, більш гнучкий:
+```bash
+vendor/bin/php-cs-fixer fix src --rules=@PSR12
+```
+
+**Інтеграція в CI/CD — ключова практика:**
+```yaml
+# GitHub Actions
+- name: PHPStan
+  run: vendor/bin/phpstan analyse --no-progress --error-format=github
+
+- name: Rector (dry-run)
+  run: vendor/bin/rector process --dry-run --no-progress
+```
+
+Якщо PHPStan/Rector знаходить проблему — PR не мержиться.
+
+**Baseline** — для поступового впровадження в legacy-проєктах:
+```bash
+vendor/bin/phpstan analyse --generate-baseline
+# Створює phpstan-baseline.neon зі списком існуючих помилок
+# Нові помилки блокують CI, старі ігноруються до виправлення
+```
+
+**Практичний підхід:**
+- Новий проєкт: PHPStan level 8+ з першого дня
+- Legacy: baseline → поступово підвищувати рівень і чистити помилки
+- Rector при оновленні PHP або Laravel версії — економить години ручного рефакторингу
+- PHPCS/CS-Fixer у pre-commit hook — форматування не потрапляє в diff
+
+#### Міні-шпаргалка
+
+- **PHPStan** — 0-9 рівні; level 8+ для нових проєктів; baseline для legacy
+- **Psalm** — альтернатива з taint analysis для security; рівні 1-8 (1 суворіший)
+- **Rector** — автоматичний рефакторинг: PHP upgrade, deprecated API, coding style
+- **PHPCS/PHP-CS-Fixer** — coding standards (PSR-12); `phpcbf` автовиправляє
+- CI: PHPStan + Rector dry-run у кожному PR
+- Baseline — поступове впровадження без блокування роботи на legacy
+
+</details>
+
+---
+
+<a id="34"></a>
+
+### 34. Які принципи ООП ви вважаєте базовими і як вони проявляються в PHP?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Чотири базові принципи ООП — **інкапсуляція, наслідування, поліморфізм, абстракція**. Кожен вирішує конкретну проблему проєктування.
+
+---
+
+**Інкапсуляція** — приховування внутрішнього стану об'єкта; доступ тільки через публічний інтерфейс. Захищає від випадкової зовнішньої модифікації і дозволяє змінювати реалізацію без зміни клієнтського коду.
+
+```php
+class BankAccount
+{
+    private float $balance;
+
+    public function __construct(float $initial)
+    {
+        if ($initial < 0) throw new \InvalidArgumentException('Balance cannot be negative');
+        $this->balance = $initial;
+    }
+
+    public function deposit(float $amount): void
+    {
+        if ($amount <= 0) throw new \InvalidArgumentException('Amount must be positive');
+        $this->balance += $amount;
+    }
+
+    public function getBalance(): float
+    {
+        return $this->balance;
+    }
+}
+
+// $account->balance = -9999; // неможливо — private
+$account->deposit(100);       // тільки через валідований метод
+```
+
+PHP: `private`, `protected`, `public` + `readonly` (PHP 8.1) для повної незмінності після конструктора.
+
+---
+
+**Наслідування** — клас-нащадок отримує поведінку батька і може її розширювати або перевизначати.
+
+```php
+abstract class Notification
+{
+    abstract public function send(string $message): void;
+
+    public function sendWithLog(string $message): void
+    {
+        $this->log("Sending: $message");
+        $this->send($message);
+    }
+
+    private function log(string $text): void { /* ... */ }
+}
+
+class EmailNotification extends Notification
+{
+    public function send(string $message): void
+    {
+        mail($this->to, 'Notification', $message);
+    }
+}
+
+class SlackNotification extends Notification
+{
+    public function send(string $message): void
+    {
+        $this->slackClient->post($message);
+    }
+}
+```
+
+PHP підтримує **тільки одиночне наслідування** (`extends`). Множинне наслідування — через інтерфейси (`implements`) і trait-и.
+
+**Коли уникати наслідування:** глибокі ієрархії (3+ рівні) стають крихкими — зміна батьківського класу ламає всіх нащадків. Композиція часто краща.
+
+---
+
+**Поліморфізм** — різні об'єкти відповідають на одне й те саме повідомлення по-різному. Код залежить від інтерфейсу, а не від конкретного класу.
+
+```php
+interface Renderable
+{
+    public function render(): string;
+}
+
+class HtmlButton implements Renderable
+{
+    public function render(): string { return '<button>Click</button>'; }
+}
+
+class JsonButton implements Renderable
+{
+    public function render(): string { return '{"type":"button"}'; }
+}
+
+// Поліморфний код — не знає конкретного типу:
+function renderAll(Renderable ...$components): string
+{
+    return implode('', array_map(fn($c) => $c->render(), $components));
+}
+```
+
+PHP реалізує поліморфізм через **interfaces**, **abstract classes** і **duck typing** (якщо є метод — можна викликати, незважаючи на тип). З PHP 8.0 union types і `match` дають додаткову гнучкість.
+
+---
+
+**Абстракція** — приховування деталей реалізації за простим інтерфейсом. Клієнт знає *що* робить об'єкт, але не *як*.
+
+```php
+interface Cache
+{
+    public function get(string $key): mixed;
+    public function set(string $key, mixed $value, int $ttl = 3600): void;
+    public function delete(string $key): void;
+}
+
+class RedisCache implements Cache { /* ... */ }
+class MemcachedCache implements Cache { /* ... */ }
+class ArrayCache implements Cache { /* ... */ } // для тестів
+
+// Сервіс залежить від абстракції, а не реалізації:
+class ProductService
+{
+    public function __construct(private readonly Cache $cache) {}
+
+    public function getProduct(int $id): Product
+    {
+        return $this->cache->get("product:$id")
+            ?? $this->loadFromDb($id);
+    }
+}
+```
+
+В тестах передається `ArrayCache`, у production — `RedisCache`. `ProductService` про це не знає.
+
+---
+
+**Зв'язок з SOLID:** чотири принципи ООП — фундамент; SOLID — конкретні правила як застосовувати цей фундамент правильно. Інкапсуляція → SRP (один клас — одна відповідальність). Поліморфізм + абстракція → OCP (відкритий для розширення, закритий для змін) і DIP (залежність від абстракцій).
+
+#### Міні-шпаргалка
+
+- **Інкапсуляція**: `private`/`protected` + публічний інтерфейс; `readonly` для незмінності
+- **Наслідування**: `extends` (одиночне); глибокі ієрархії крихкі — композиція часто краща
+- **Поліморфізм**: `interface` / `abstract class`; код залежить від типу, не від реалізації
+- **Абстракція**: `interface` як контракт; DI + interface → легка заміна реалізації (у тестах теж)
+- PHP: множинне наслідування через `interface` + `trait`; duck typing без явного `implements`
+
+</details>
+
+---
+
+<a id="35"></a>
+
+### 35. Які модифікатори видимості існують у PHP і як вони працюють у контексті наслідування?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+PHP має три модифікатори видимості для властивостей, методів і констант:
+
+**`public`** — доступний звідусіль: всередині класу, з нащадків, ззовні.
+
+**`protected`** — доступний тільки всередині класу і його нащадків. Ззовні — недоступний.
+
+**`private`** — доступний тільки всередині класу де оголошено. Нащадки не бачать і не можуть викликати.
+
+```php
+class Animal
+{
+    public string $name;
+    protected int $age;
+    private string $secret = 'dna';
+
+    public function describe(): string
+    {
+        return "{$this->name}, age {$this->age}, {$this->secret}"; // всі доступні
+    }
+}
+
+class Dog extends Animal
+{
+    public function info(): string
+    {
+        echo $this->name;    // OK — public
+        echo $this->age;     // OK — protected
+        echo $this->secret;  // Fatal Error — private недоступний
+    }
+}
+
+$dog = new Dog();
+echo $dog->name;    // OK — public
+echo $dog->age;     // Fatal Error — protected ззовні
+echo $dog->secret;  // Fatal Error — private ззовні
+```
+
+**`private` у наслідуванні — важливий нюанс:** нащадок може оголосити власну `private` властивість з тим самим іменем — це буде **окрема** властивість, не та що в батьку:
+
+```php
+class Base
+{
+    private string $value = 'base';
+
+    public function getValue(): string { return $this->value; } // 'base'
+}
+
+class Child extends Base
+{
+    private string $value = 'child'; // окрема властивість, не override батьківської
+
+    public function getOwn(): string { return $this->value; }  // 'child'
+}
+
+$c = new Child();
+echo $c->getValue(); // 'base'  — батьківський метод бачить батьківський $value
+echo $c->getOwn();   // 'child' — дочірній метод бачить дочірній $value
+```
+
+**`protected` vs `private` у практиці:**
+- `private` — коли реалізація не має розкриватись навіть нащадкам; зміна не зламає нащадків
+- `protected` — коли нащадкам може знадобитись доступ для розширення поведінки
+- Уникати `protected` властивостей (стан) — краще `private` + `protected` getter; `protected` методи — нормально
+
+**`readonly` + видимість (PHP 8.1+):**
+```php
+class User
+{
+    public function __construct(
+        public readonly int    $id,      // public, але незмінний після конструктора
+        protected readonly string $name, // protected readonly
+    ) {}
+}
+```
+
+#### Міні-шпаргалка
+
+- `public` — всюди; `protected` — клас + нащадки; `private` — тільки поточний клас
+- `private` НЕ наслідується — нащадок не бачить і не перевизначає; може оголосити своє з тим самим іменем
+- `protected` для методів — нормально; для властивостей — краще `private` + accessor
+- `readonly` комбінується з будь-яким модифікатором видимості
+
+</details>
+
+---
+
+<a id="36"></a>
+
+### 36. Чи можна змінювати видимість методів або властивостей у дочірньому класі, і які тут існують правила?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Правило LSP (Liskov Substitution Principle) для видимості:** нащадок може тільки **розширювати** видимість (робити більш відкритою), але не **звужувати** (робити більш закритою).
+
+```php
+class Base
+{
+    protected function doWork(): void {}
+    public function execute(): void {}
+}
+
+class Child extends Base
+{
+    // МОЖНА: protected → public (розширення)
+    public function doWork(): void {}
+
+    // ЗАБОРОНЕНО: public → protected (звуження) — Fatal Error
+    // protected function execute(): void {}
+}
+```
+
+Логіка: якщо код очікує об'єкт `Base` і викликає `execute()`, він має працювати і з `Child`. Якщо `Child` зробить `execute()` `protected` — код зламається. PHP захищає від цього на рівні рушія.
+
+**Таблиця дозволених змін:**
+
+| Батько | Нащадок | Дозволено? |
+|---|---|---|
+| `private` | будь-який | Так (це нова властивість, не override) |
+| `protected` | `protected` | Так (без змін) |
+| `protected` | `public` | Так (розширення) |
+| `protected` | `private` | **Ні** — Fatal Error |
+| `public` | `public` | Так (без змін) |
+| `public` | `protected` | **Ні** — Fatal Error |
+| `public` | `private` | **Ні** — Fatal Error |
+
+**`private` — окремий випадок:** `private` методи/властивості не є частиною контракту і не успадковуються. Нащадок може оголосити метод з тим самим іменем і будь-якою видимістю — це не override, а нова декларація:
+
+```php
+class Base
+{
+    private function helper(): string { return 'base'; }
+    public function run(): string { return $this->helper(); } // завжди Base::helper
+}
+
+class Child extends Base
+{
+    public function helper(): string { return 'child'; } // нова функція, не override
+}
+
+$c = new Child();
+echo $c->run(); // 'base' — Base::run() викликає Base::helper(), не Child::helper()
+```
+
+**`final` методи** — не можна override взагалі:
+```php
+class Base
+{
+    final public function critical(): void { /* ... */ }
+}
+
+class Child extends Base
+{
+    // public function critical(): void {} // Fatal Error: cannot override final method
+}
+```
+
+#### Міні-шпаргалка
+
+- Видимість можна тільки **розширювати**: `protected`→`public` ✓; `public`→`protected` ✗
+- PHP кидає Fatal Error при спробі звузити видимість
+- `private` не наслідується — нащадок може оголосити своє незалежно від видимості
+- `final` метод — заборонений override повністю
+
+</details>
+
+---
+
+<a id="37"></a>
+
+### 37. Що таке пізнє статичне зв'язування у PHP і для чого воно потрібне?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Late Static Binding (LSB)** — механізм де `static::` посилається на клас, через який метод був **викликаний** (runtime), а не на клас де він **визначений** (compile-time).
+
+**Проблема без LSB:**
+```php
+class Base
+{
+    public static function create(): static
+    {
+        return new self(); // self завжди = Base, навіть якщо викликано через Child
+    }
+}
+
+class Child extends Base {}
+
+$obj = Child::create();
+var_dump($obj instanceof Child); // false — повернувся Base!
+var_dump($obj instanceof Base);  // true
+```
+
+**Рішення — `static::`:**
+```php
+class Base
+{
+    public static function create(): static
+    {
+        return new static(); // static = клас через який викликали
+    }
+}
+
+class Child extends Base {}
+
+$obj = Child::create();
+var_dump($obj instanceof Child); // true — правильно!
+```
+
+`static::` вирішується в runtime до фактичного класу виклику. `self::` завжди вирішується в compile-time до класу де написано код.
+
+**`static::class` vs `self::class`:**
+```php
+class Base
+{
+    public function whoAmI(): string
+    {
+        return self::class;   // завжди 'Base'
+    }
+
+    public function whoCalledMe(): string
+    {
+        return static::class; // 'Base' або 'Child' залежно від виклику
+    }
+}
+
+class Child extends Base {}
+
+$child = new Child();
+echo $child->whoAmI();      // 'Base'
+echo $child->whoCalledMe(); // 'Child'
+```
+
+**Практичне використання:**
+
+*Fluent interface / Builder що повертає правильний тип:*
+```php
+class QueryBuilder
+{
+    protected array $conditions = [];
+
+    public function where(string $condition): static
+    {
+        $clone = clone $this;
+        $clone->conditions[] = $condition;
+        return $clone; // static — повертає той самий тип що й викликали
+    }
+}
+
+class UserQueryBuilder extends QueryBuilder
+{
+    public function active(): static
+    {
+        return $this->where('active = 1');
+    }
+}
+
+$q = (new UserQueryBuilder())->active()->where('age > 18');
+// $q — UserQueryBuilder, не QueryBuilder
+```
+
+*Factory method у батьківському класі:*
+```php
+abstract class Model
+{
+    public static function find(int $id): static
+    {
+        // ... query
+        return new static(); // правильний підклас
+    }
+}
+
+class User extends Model {}
+class Post extends Model {}
+
+$user = User::find(1); // User instance
+$post = Post::find(2); // Post instance
+```
+
+**`get_called_class()`** — функція еквівалентна `static::class`:
+```php
+echo get_called_class(); // ім'я класу через який викликано
+```
+
+#### Міні-шпаргалка
+
+- `self::` → клас де **написаний** код (compile-time)
+- `static::` → клас через який **викликали** (runtime, LSB)
+- `new self()` у батьку завжди повертає батька; `new static()` — правильний підклас
+- Використовується у factory methods, fluent builder, singleton у підкласах
+- `static::class` ≡ `get_called_class()`
+
+</details>
+
+---
+
+<a id="38"></a>
+
+### 38. У чому різниця між self, static і $this у PHP?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Три способи посилатись на клас або об'єкт всередині методу — кожен для своєї ситуації:
+
+**`$this`** — посилання на **поточний екземпляр** об'єкта. Доступний тільки в instance-методах (не в static). Вирішується в runtime до конкретного об'єкта:
+
+```php
+class Counter
+{
+    private int $count = 0;
+
+    public function increment(): void
+    {
+        $this->count++; // $this = конкретний об'єкт Counter
+    }
+
+    public function getCount(): int
+    {
+        return $this->count;
+    }
+}
+```
+
+**`self::`** — посилання на **клас де написаний код**. Вирішується в compile-time. Не залежить від того через який клас викликано:
+
+```php
+class Base
+{
+    private static int $instances = 0;
+
+    public static function getInstance(): self
+    {
+        self::$instances++;
+        return new self(); // завжди Base, навіть якщо викликати Child::getInstance()
+    }
+
+    public static function getClass(): string
+    {
+        return self::class; // завжди 'Base'
+    }
+}
+```
+
+**`static::`** — Late Static Binding. Вирішується в **runtime** до класу через який викликано. Дозволяє нащадкам перевизначити поведінку:
+
+```php
+class Base
+{
+    public static function create(): static
+    {
+        return new static(); // клас визначається під час виклику
+    }
+
+    public static function getClass(): string
+    {
+        return static::class; // 'Base' або 'Child' — залежить від виклику
+    }
+}
+
+class Child extends Base {}
+
+Base::getClass();  // 'Base'
+Child::getClass(); // 'Child'
+
+Base::create() instanceof Base;  // true
+Child::create() instanceof Child; // true
+```
+
+**Порівняльна таблиця:**
+
+| | `$this` | `self::` | `static::` |
+|---|---|---|---|
+| Контекст | Instance method | Static або instance | Static або instance |
+| Вирішується | Runtime → поточний об'єкт | Compile-time → клас де код | Runtime → клас виклику (LSB) |
+| Наслідування | Так (поточний об'єкт може бути нащадком) | Ні (завжди батько) | Так (нащадок) |
+| `new self()` | — | Завжди батьківський клас | — |
+| `new static()` | — | — | Правильний підклас |
+
+**Практичне правило:**
+- `$this->` — будь-яке звернення до стану чи методів екземпляра
+- `self::` — константи, статичні методи/властивості коли НЕ потрібне наслідування
+- `static::` — factory methods, fluent builders, будь-що де нащадок має отримати правильний тип
+- `parent::` — виклик перевизначеного методу батька
+
+```php
+class Animal
+{
+    public function __construct(protected string $name) {}
+
+    public function describe(): string
+    {
+        return static::class . ': ' . $this->name; // static для правильного типу
+    }
+}
+
+class Dog extends Animal
+{
+    public function __construct(string $name, private string $breed)
+    {
+        parent::__construct($name); // parent:: — виклик батьківського конструктора
+    }
+}
+
+echo (new Dog('Rex', 'Labrador'))->describe(); // 'Dog: Rex'
+```
+
+#### Міні-шпаргалка
+
+- `$this` — поточний екземпляр; тільки в instance methods
+- `self::` — клас де написано код (compile-time); не враховує наслідування
+- `static::` — клас виклику (runtime, LSB); враховує наслідування
+- `parent::` — батьківський клас; для виклику перевизначених методів
+- `new self()` → завжди батько; `new static()` → правильний підклас
+- Правило вибору: factory/builder → `static::`; константи без наслідування → `self::`; стан об'єкта → `$this->`
+
+</details>
+
+---
+
+<a id="39"></a>
+
+### 39. Для чого в PHP потрібні магічні методи і які ризики вони створюють при неправильному використанні?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Магічні методи** — спеціальні методи з префіксом `__` що PHP викликає автоматично у відповідь на певні операції над об'єктом. Вони дозволяють кастомізувати поведінку об'єкта: як він створюється, серіалізується, порівнюється, конвертується в рядок тощо.
+
+**Для чого потрібні:**
+- Контроль ініціалізації (`__construct`, `__destruct`)
+- Перевантаження доступу до властивостей (`__get`, `__set`, `__isset`, `__unset`) — для dynamic properties, proxy-об'єктів
+- Перетворення об'єкта (`__toString`, `__invoke`, `__debugInfo`)
+- Серіалізація (`__sleep`, `__wakeup`, `__serialize`, `__unserialize`)
+- Клонування (`__clone`)
+
+**Ризики при неправильному використанні:**
+
+*`__get` / `__set` приховують помилки:*
+```php
+class Config
+{
+    private array $data = [];
+
+    public function __get(string $name): mixed
+    {
+        return $this->data[$name] ?? null; // помилка в імені ключа — мовчки null
+    }
+}
+
+$config = new Config();
+echo $config->databse_host; // null — друкарська помилка непомітна
+// З typed properties — Fatal Error відразу, а не тихий null
+```
+
+*`__toString` без обробки винятків:* у PHP 7 виняток у `__toString` — fatal error. У PHP 8 — звичайний exception, але все одно треба бути обережним де `__toString` викликається неявно (в `echo`, конкатенації, `sprintf`).
+
+*`__destruct` з побічними ефектами:*
+```php
+class TempFile
+{
+    public function __destruct()
+    {
+        unlink($this->path); // може спрацювати у непередбачуваний момент
+        // якщо об'єкт у масиві — деструктор викликається при unset масиву
+    }
+}
+```
+
+*`__call` / `__callStatic` маскують відсутні методи:* помилка в назві методу — не Fatal Error, а виклик `__call`. PHPStan не може аналізувати динамічні виклики.
+
+*Продуктивність:* `__get`/`__set` повільніші за прямий доступ до властивостей — PHP кожного разу перевіряє чи властивість існує, потім викликає magic method.
+
+**Загальне правило:** магічні методи — інструмент для фреймворків і бібліотек (ORM, DI-контейнери, proxy). У бізнес-коді — уникати на користь явних методів і typed properties.
+
+#### Міні-шпаргалка
+
+- Магічні методи — автоматичний виклик PHP при певних операціях
+- `__get`/`__set` приховують помилки в іменах — typed properties безпечніше
+- `__call`/`__callStatic` ламають статичний аналіз
+- `__destruct` з I/O — непередбачуваний момент виклику
+- Використовувати у фреймворках/бібліотеках; у бізнес-коді — явні методи
+
+</details>
+
+---
+
+<a id="40"></a>
+
+### 40. Які магічні методи ви знаєте і в яких сценаріях їх реально застосовують?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Конструктор і деструктор:**
+
+`__construct()` — викликається при `new`. Місце для ін'єкції залежностей, валідації і ініціалізації стану. Стандартний метод — використовується скрізь.
+
+`__destruct()` — викликається при знищенні об'єкта (refcount=0 або завершення скрипту). Корисний для явного закриття ресурсів:
+```php
+class DatabaseConnection
+{
+    public function __destruct()
+    {
+        $this->pdo = null; // явне звільнення з'єднання
+    }
+}
+```
+
+**Перетворення:**
+
+`__toString(): string` — неявна конвертація об'єкта в рядок:
+```php
+class Money
+{
+    public function __construct(
+        private int $amount,
+        private string $currency
+    ) {}
+
+    public function __toString(): string
+    {
+        return number_format($this->amount / 100, 2) . ' ' . $this->currency;
+    }
+}
+
+$price = new Money(1999, 'UAH');
+echo $price;              // '19.99 UAH'
+echo "Price: $price";     // 'Price: 19.99 UAH'
+```
+
+`__invoke()` — дозволяє викликати об'єкт як функцію:
+```php
+class Multiplier
+{
+    public function __construct(private int $factor) {}
+
+    public function __invoke(int $value): int
+    {
+        return $value * $this->factor;
+    }
+}
+
+$double = new Multiplier(2);
+echo $double(5);              // 10
+$result = array_map($double, [1, 2, 3]); // [2, 4, 6] — як callable
+```
+Використовується для callable-об'єктів, middleware, handler-ів.
+
+**Перевантаження властивостей:**
+
+`__get($name)` / `__set($name, $value)` — викликаються при доступі до неіснуючої або недоступної (private/protected) властивості:
+```php
+class DynamicDTO
+{
+    private array $data = [];
+
+    public function __get(string $name): mixed
+    {
+        return $this->data[$name] ?? null;
+    }
+
+    public function __set(string $name, mixed $value): void
+    {
+        $this->data[$name] = $value;
+    }
+
+    public function __isset(string $name): bool
+    {
+        return isset($this->data[$name]);
+    }
+
+    public function __unset(string $name): void
+    {
+        unset($this->data[$name]);
+    }
+}
+```
+На практиці: Eloquent використовує `__get`/`__set` для доступу до атрибутів моделі і relationships (lazy loading через `__get`).
+
+**Перевантаження методів:**
+
+`__call($name, $args)` — викликається при зверненні до неіснуючого instance-методу:
+```php
+class QueryBuilder
+{
+    private array $wheres = [];
+
+    public function __call(string $method, array $args): static
+    {
+        if (str_starts_with($method, 'whereBy')) {
+            $column = lcfirst(substr($method, 7));
+            $this->wheres[] = [$column, '=', $args[0]];
+            return $this;
+        }
+        throw new \BadMethodCallException("Method {$method} not found");
+    }
+}
+
+$query->whereByStatus('active')->whereByUserId(42);
+```
+
+`__callStatic($name, $args)` — те саме для статичних викликів. Використовується у фасадах Laravel.
+
+**Серіалізація:**
+
+`__sleep()` / `__wakeup()` — стара API (PHP 5):
+```php
+class Connection
+{
+    private \PDO $pdo;
+    private string $dsn;
+
+    public function __sleep(): array
+    {
+        return ['dsn']; // серіалізувати тільки dsn, не pdo (не серіалізується)
+    }
+
+    public function __wakeup(): void
+    {
+        $this->pdo = new \PDO($this->dsn); // відновити з'єднання
+    }
+}
+```
+
+`__serialize()` / `__unserialize()` — нова API (PHP 7.4+), рекомендована:
+```php
+public function __serialize(): array
+{
+    return ['dsn' => $this->dsn, 'options' => $this->options];
+}
+
+public function __unserialize(array $data): void
+{
+    $this->dsn = $data['dsn'];
+    $this->pdo = new \PDO($this->dsn);
+}
+```
+
+**Відлагодження:**
+
+`__debugInfo()` — контролює що показує `var_dump()`:
+```php
+class SecureToken
+{
+    private string $token;
+
+    public function __debugInfo(): array
+    {
+        return ['token' => '***REDACTED***']; // не показувати реальний токен
+    }
+}
+```
+
+#### Міні-шпаргалка
+
+- `__construct` / `__destruct` — ініціалізація і cleanup ресурсів
+- `__toString` — `echo $obj`; `__invoke` — `$obj()` як callable
+- `__get`/`__set`/`__isset`/`__unset` — dynamic properties; Eloquent attributes
+- `__call`/`__callStatic` — dynamic methods; Laravel Facades, fluent builders
+- `__serialize`/`__unserialize` (7.4+) — контроль серіалізації; кращі за `__sleep`/`__wakeup`
+- `__debugInfo` — приховати чутливі дані у var_dump
+
+</details>
+
+---
+
+<a id="41"></a>
+
+### 41. Як працює клонування об'єктів у PHP і коли викликається метод __clone()?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**`clone`** — оператор що створює копію об'єкта. PHP копіює всі властивості об'єкта (shallow copy) і потім викликає `__clone()` на новому екземплярі.
+
+```php
+$original = new stdClass();
+$original->value = 42;
+
+$copy = clone $original;
+$copy->value = 99;
+
+echo $original->value; // 42 — не змінилось, це прості значення
+```
+
+**Shallow copy — проблема з об'єктами-властивостями:**
+```php
+class Address
+{
+    public function __construct(public string $city) {}
+}
+
+class User
+{
+    public function __construct(
+        public string  $name,
+        public Address $address
+    ) {}
+}
+
+$user1 = new User('Alice', new Address('Kyiv'));
+$user2 = clone $user1;
+
+$user2->name = 'Bob';          // OK — рядок, копія
+$user2->address->city = 'Lviv'; // ЗМІНЮЄ обох! — той самий Address об'єкт
+
+echo $user1->address->city; // 'Lviv' — несподівано!
+```
+
+Після `clone` `$user1->address` і `$user2->address` вказують на **один і той самий об'єкт**.
+
+**`__clone()` — хук після клонування:**
+```php
+class User
+{
+    public function __construct(
+        public string  $name,
+        public Address $address
+    ) {}
+
+    public function __clone(): void
+    {
+        // Клонуємо вкладений об'єкт — deep clone
+        $this->address = clone $this->address;
+    }
+}
+
+$user1 = new User('Alice', new Address('Kyiv'));
+$user2 = clone $user1;
+
+$user2->address->city = 'Lviv';
+echo $user1->address->city; // 'Kyiv' — тепер правильно
+```
+
+`__clone()` викликається після того як PHP скопіював всі властивості, і `$this` вже вказує на **новий** об'єкт. Тут можна клонувати вкладені об'єкти, скинути стан (ID, timestamps), відкрити нові ресурси.
+
+**Типові задачі в `__clone()`:**
+```php
+class Order
+{
+    private int $id;
+    private \DateTime $createdAt;
+    private array $items;
+    private OrderStatus $status;
+
+    public function __clone(): void
+    {
+        $this->id        = null;          // нове замовлення без ID
+        $this->createdAt = new \DateTime(); // нова дата
+        $this->status    = clone $this->status; // deep clone enum-like object
+        // $this->items — масив value objects — COW скопіює автоматично
+    }
+}
+```
+
+**`clone` vs `new`:** `clone` зберігає стан об'єкта і дешевший ніж `new` + ручне копіювання всіх полів. Корисний у fluent builder (повертати клон замість мутації):
+```php
+class ImmutableQuery
+{
+    public function where(string $condition): static
+    {
+        $clone = clone $this;
+        $clone->conditions[] = $condition;
+        return $clone; // оригінал незмінний
+    }
+}
+```
+
+#### Міні-шпаргалка
+
+- `clone $obj` — shallow copy: прості значення копіюються, об'єкти — спільний handle
+- `__clone()` — викликається на новому об'єкті після копіювання; `$this` = новий екземпляр
+- Shallow clone: вкладені об'єкти залишаються спільними — зміна у копії впливає на оригінал
+- Deep clone: `__clone()` + `clone $this->nested` для кожного вкладеного об'єкта
+- Fluent immutable builder: `$clone = clone $this; $clone->x = y; return $clone;`
+
+</details>
+
+---
+
+<a id="42"></a>
+
+### 42. У чому різниця між shallow clone і deep clone для об'єктів із вкладеними залежностями?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Shallow clone** — PHP копіює значення всіх властивостей об'єкта. Для скалярів і масивів (COW) — повна копія. Для властивостей-об'єктів — копіюється тільки handle (вказівник), обидва об'єкти вказують на **той самий** вкладений об'єкт.
+
+**Deep clone** — рекурсивне клонування всього графа об'єктів. Кожен вкладений об'єкт теж клонується — повна незалежна копія.
+
+```
+Shallow clone:
+  $a (User)                $b (User) = clone $a
+  ├── name: "Alice"        ├── name: "Alice" (копія рядка)
+  └── address ────────────►└── address (той самий об'єкт!)
+         └── city: "Kyiv"
+
+Deep clone:
+  $a (User)                $b (User) = clone $a + __clone
+  ├── name: "Alice"        ├── name: "Alice"
+  └── address ─► [Kyiv]   └── address ─► [Kyiv] (новий об'єкт!)
+```
+
+**Реалізація deep clone через `__clone()`:**
+```php
+class Money
+{
+    public function __construct(
+        public int    $amount,
+        public string $currency
+    ) {}
+}
+
+class LineItem
+{
+    public function __construct(
+        public string $name,
+        public Money  $price,  // об'єкт
+        public int    $qty
+    ) {}
+
+    public function __clone(): void
+    {
+        $this->price = clone $this->price; // глибоке клонування
+    }
+}
+
+class Cart
+{
+    /** @param LineItem[] $items */
+    public function __construct(private array $items = []) {}
+
+    public function __clone(): void
+    {
+        // Масив COW — але об'єкти всередині треба клонувати
+        $this->items = array_map(fn($item) => clone $item, $this->items);
+    }
+}
+```
+
+**Проблеми deep clone:**
+
+*Циклічні посилання* — якщо `$a->b = $obj` і `$obj->a = $a`, наївне глибоке клонування зациклиться. Потрібно відстежувати вже клоновані об'єкти:
+```php
+public function deepClone(array &$cloned = []): static
+{
+    $id = spl_object_id($this);
+    if (isset($cloned[$id])) return $cloned[$id]; // вже клонували
+
+    $clone = clone $this;
+    $cloned[$id] = $clone;
+    // ... клонування властивостей з передачею $cloned
+    return $clone;
+}
+```
+
+*Shared dependencies* — не завжди потрібен deep clone. Сервіси (Logger, EventDispatcher) в DI — не клонуються: вони stateless або навмисно shared:
+```php
+class OrderProcessor
+{
+    public function __construct(
+        private OrderRepository $repo,   // не клонувати — shared service
+        private EventDispatcher $events, // не клонувати — shared service
+        private Order $order,            // клонувати — стан
+    ) {}
+
+    public function __clone(): void
+    {
+        $this->order = clone $this->order; // тільки стан, не сервіси
+    }
+}
+```
+
+**Альтернатива — serialize/unserialize** для deep clone без написання `__clone()`:
+```php
+$deepCopy = unserialize(serialize($original));
+// Повністю незалежна копія всього графа об'єктів
+// Але: не клонує ресурси (PDO, file handles), повільніше
+```
+
+Бібліотека `myclabs/deep-copy` вирішує всі крайні випадки автоматично:
+```php
+$copier = new DeepCopy\DeepCopy();
+$clone  = $copier->copy($original);
+```
+
+**Коли shallow clone достатній:**
+- Value objects з тільки скалярними властивостями (`Money`, `DateRange`)
+- Immutable об'єкти — їх не можна змінити після створення, тому sharing безпечне
+- Fluent builder де змінюєш тільки одну скалярну властивість
+
+**Коли потрібен deep clone:**
+- Mutable aggregate roots (Order, Cart, Document)
+- Об'єкти з вкладеними колекціями mutable об'єктів
+- Тести: клонувати fixture щоб кожен тест мав свій стан
+
+#### Міні-шпаргалка
+
+- **Shallow**: скаляри копіюються, об'єкти — спільний handle; стандартне `clone`
+- **Deep**: кожен вкладений об'єкт теж клонується; через `__clone()` + `clone $this->prop`
+- Масив об'єктів у `__clone()`: `array_map(fn($i) => clone $i, $this->items)`
+- Сервіси (stateless) — не клонувати; mutable state — клонувати
+- Циклічні посилання → відстежувати клоновані через `spl_object_id()`
+- `unserialize(serialize($obj))` — quick&dirty deep clone; `myclabs/deep-copy` — правильно
+
+</details>
+
+---
+
+<a id="43"></a>
+
+### 43. Що таке інтерфейс у PHP, що він може містити і коли інтерфейс доречніший за абстрактний клас?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Інтерфейс** — контракт: оголошує, *що* клас повинен вміти робити, але не *як*. Клас реалізує інтерфейс через `implements`.
+
+**Що може містити інтерфейс:**
+
+```php
+interface PaymentGateway
+{
+    // Константи (public, final)
+    const VERSION = '2.0';
+
+    // Сигнатури публічних методів (без тіла)
+    public function charge(Money $amount): TransactionId;
+    public function refund(TransactionId $id): void;
+
+    // PHP 8.0+: можна оголошувати повернення static
+    public static function create(array $config): static;
+}
+```
+
+**Що НЕ може містити:**
+- Властивості (тільки константи)
+- Конструктор з реалізацією
+- private/protected члени
+- Тіло методу (до PHP 8 — взагалі; PHP 8 — тільки якщо константа)
+
+**Клас може реалізовувати кілька інтерфейсів:**
+```php
+class StripeGateway implements PaymentGateway, Loggable, Serializable
+{
+    public function charge(Money $amount): TransactionId { /* ... */ }
+    public function refund(TransactionId $id): void { /* ... */ }
+    // + методи з Loggable, Serializable
+}
+```
+
+**Інтерфейси можуть розширювати інші інтерфейси:**
+```php
+interface AsyncPaymentGateway extends PaymentGateway
+{
+    public function chargeAsync(Money $amount): Promise;
+}
+```
+
+**Коли інтерфейс доречніший за abstract клас:**
+
+| Ситуація | Чому інтерфейс |
+|---|---|
+| Різні ієрархії класів | Клас не може успадковувати 2 батьки, але реалізовувати N інтерфейсів — так |
+| Тільки контракт, без спільного стану | Інтерфейс не нав'язує реалізацію |
+| Dependency Inversion (DI-контейнер) | `PaymentGateway $gw` — типізація без прив'язки до конкретного класу |
+| Mocking у тестах | Легше мокати інтерфейс, ніж конкретний клас |
+| Публічне API / бібліотека | Стабільний контракт; реалізація може змінюватися |
+
+```php
+// DIP: залежність від абстракції, а не від реалізації
+class OrderService
+{
+    public function __construct(
+        private PaymentGateway $gateway // інтерфейс
+    ) {}
+}
+
+// Можна підмінити реалізацію без зміни OrderService
+$service = new OrderService(new StripeGateway($config));
+$service = new OrderService(new PayPalGateway($config));
+$service = new OrderService(new FakeGateway());  // у тестах
+```
+
+#### Міні-шпаргалка
+
+- Інтерфейс = контракт: тільки сигнатури public методів + константи
+- Клас може реалізовувати **кілька** інтерфейсів (`implements A, B, C`)
+- Інтерфейс може розширювати інший інтерфейс (`extends`)
+- Не може містити: властивості, private/protected, реалізацію методів
+- Кращий вибір коли: різні ієрархії, DIP, мокінг, публічний API
+
+</details>
+
+---
+
+<a id="44"></a>
+
+### 44. Що таке абстрактний клас і в чому його відмінність від інтерфейсу?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Абстрактний клас** — клас, який не можна інстанціювати напряму. Може містити як абстрактні методи (без реалізації), так і конкретні (з реалізацією). Оголошується через `abstract class`.
+
+```php
+abstract class BaseRepository
+{
+    // Конкретний метод — спільна реалізація для всіх нащадків
+    public function findById(int $id): ?object
+    {
+        return $this->query()->where('id', $id)->first();
+    }
+
+    // Абстрактний метод — кожен нащадок реалізує сам
+    abstract protected function query(): QueryBuilder;
+
+    // Може мати конструктор, властивості, будь-яку видимість
+    public function __construct(
+        protected Connection $db
+    ) {}
+}
+
+class UserRepository extends BaseRepository
+{
+    protected function query(): QueryBuilder
+    {
+        return $this->db->table('users');
+    }
+}
+```
+
+**Порівняння інтерфейсу та абстрактного класу:**
+
+| | Інтерфейс | Абстрактний клас |
+|---|---|---|
+| Наслідування | `implements` (кілька) | `extends` (один) |
+| Реалізація методів | Тільки PHP 8 константи | Так, будь-яка |
+| Властивості | Тільки константи | Так, будь-які |
+| Конструктор | Ні | Так |
+| Видимість | Тільки public | public/protected/private |
+| Спільний стан | Ні | Так |
+| Мета | Контракт | Базова реалізація + контракт |
+
+**Коли абстрактний клас:**
+- Є спільна логіка/стан, яку не хочеться дублювати в нащадках
+- Template Method Pattern — базовий клас визначає алгоритм, нащадки заповнюють кроки
+
+```php
+abstract class DataImporter
+{
+    // Template Method — алгоритм фіксований
+    final public function import(string $file): ImportResult
+    {
+        $raw  = $this->read($file);       // крок 1
+        $data = $this->transform($raw);   // крок 2
+        return $this->save($data);        // крок 3
+    }
+
+    abstract protected function read(string $file): array;
+    abstract protected function transform(array $raw): array;
+
+    // Конкретний крок зі спільною реалізацією
+    protected function save(array $data): ImportResult
+    {
+        // дефолтне збереження в БД
+    }
+}
+
+class CsvImporter extends DataImporter
+{
+    protected function read(string $file): array { /* CSV парсинг */ }
+    protected function transform(array $raw): array { /* маппінг */ }
+}
+```
+
+**Можна комбінувати:** abstract клас + реалізація інтерфейсу:
+```php
+abstract class AbstractGateway implements PaymentGateway
+{
+    // Реалізує частину методів інтерфейсу
+    // Нащадки доповнюють решту
+}
+```
+
+#### Міні-шпаргалка
+
+- `abstract class` = не можна `new`, може мати abstract + конкретні методи
+- Від abstract класу можна успадковуватися тільки **одному** нащадку
+- Абстрактний клас: спільна логіка + обов'язкові методи для нащадків
+- Інтерфейс: чистий контракт, без реалізації, множинна реалізація
+- Template Method — класичний патерн для abstract класу
+- Можна: `abstract class Foo implements Bar` — частково реалізувати інтерфейс
 
 </details>
 
