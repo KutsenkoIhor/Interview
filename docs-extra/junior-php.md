@@ -1485,9 +1485,10 @@ foreach ($methods as $method) {
 SPL предоставляет поддержку **автозагрузки классов** через функцию **`spl_autoload_register()`**, которая позволяет регистрировать функции автозагрузки. Автозагрузка позволяет PHP автоматически находить и подключать классы, когда они впервые используются, вместо ручного подключения файлов с помощью `require` или `include`.
 
 #### Пример автозагрузки:
+
 ```php
 spl_autoload_register(function ($className) {
-    $file = __DIR__ . '/' . $className . '.php';
+    $file = __DIR__ . 'junior-php.md/' . $className . '.php';
     if (file_exists($file)) {
         require $file;
     }
