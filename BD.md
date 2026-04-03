@@ -52,6 +52,40 @@
 
 21. [Які загальні підходи до оптимізації продуктивності бази даних ви використовуєте на практиці? Поясніть роботу з індексами, профілювання запитів, денормалізацію, кешування, партиціювання, read/write split та архітектурні підходи.](#21)
 
+## Блок 6. Транзакції, ACID і конкурентний доступ
+
+22. [Що таке транзакція і як вона працює в реляційній базі даних? Поясніть BEGIN, COMMIT, ROLLBACK, а також типові сценарії застосування транзакцій.](#22)
+
+23. [Що таке ACID і чому ці властивості важливі для транзакційних систем? Поясніть Atomicity, Consistency, Isolation, Durability і практичне значення кожної з них.](#23)
+
+24. [Чи можлива транзакція всередині транзакції, і як це працює на практиці? Поясніть nested transactions, savepoints та обмеження в реальних СУБД.](#24)
+
+25. [Які рівні ізоляції транзакцій існують і чим вони відрізняються? Поясніть Read Uncommitted, Read Committed, Repeatable Read, Serializable.](#25)
+
+26. [Що таке конкурентний доступ до даних у багатокористувацькій системі, які проблеми він створює і як їх вирішують транзакції, рівні ізоляції та механізми блокування? Поясніть dirty read, non-repeatable read, phantom read, lost update, race conditions, lock wait, deadlock, а також роль рівнів ізоляції, locking strategies і практичні підходи до виявлення та зменшення таких проблем.](#26)
+
+## Блок 7. Масштабування і робота з великими даними
+
+27. [Що таке реплікація в базах даних, навіщо вона потрібна, які типи реплікації існують і які в неї обмеження? Поясніть підходи на кшталт master-replica, сценарії для read scaling, проблеми replication lag і consistency issues, а також компроміси між продуктивністю, консистентністю та складністю підтримки.](#27)
+
+28. [Що таке партиціювання таблиць, які задачі воно вирішує і які проблеми може створювати? Поясніть, як працює partition pruning, які бувають типи partitioning та коли партиціювання може не дати очікуваного ефекту.](#28)
+
+29. [Що таке шардінг, коли він потрібен і які складнощі з'являються після його впровадження? Поясніть розподіл даних, складність join-ів, транзакцій між шардами та routing запитів.](#29)
+
+## Блок 8. Пошук, кеші та суміжні системи
+
+30. [Що таке full-text search у MySQL та Elasticsearch, як вони працюють і коли який підхід краще використовувати? Поясніть, як працює full-text search у MySQL, що таке inverted index в Elasticsearch, у чому різниця між пошуком у реляційній БД та окремому пошуковому рушії, які є обмеження MySQL full-text search, і в яких сценаріях достатньо можливостей самої БД, а коли краще використовувати Elasticsearch.](#30)
+
+31. [Які структури даних підтримує Redis і для яких задач кожна з них використовується? Поясніть string, list, set, sorted set, hash, bitmap, stream на практичних прикладах.](#31)
+
+32. [У яких випадках Redis варто використовувати не лише як кеш, а як окремий інструмент для прикладних задач? Наприклад: rate limiting, distributed locks, counters, queues, pub/sub, ephemeral data.](#32)
+
+33. [Що таке RabbitMQ і для яких задач у бекенд-системі він використовується? Поясніть черги, асинхронну обробку, retry, decoupling між сервісами та типові кейси.](#33)
+
+## Блок 9. Суміжні теми для Senior PHP Developer
+
+34. [Що таке міграції бази даних і чому вони важливі в командній розробці? Поясніть version control схеми БД, repeatable deployment, rollback та роль міграцій у CI/CD.](#34)
+
 ---
 
 <a id="1"></a>
@@ -4111,5 +4145,2671 @@ Event Sourcing:
 - **Read/write split** — горизонтальне масштабування читання; обережно з replication lag
 - **Connection pool** — завжди між app і БД на production; PgBouncer / ProxySQL
 - **Шардинг** — останній крок, коли все інше вичерпане
+
+</details>
+
+---
+
+<a id="22"></a>
+
+### 22. Що таке транзакція і як вона працює в реляційній базі даних? Поясніть BEGIN, COMMIT, ROLLBACK, а також типові сценарії застосування транзакцій.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+**Транзакція** — група SQL-операцій що виконуються як єдине ціле: або всі успішно, або жодна. Це ключовий механізм для підтримки цілісності даних при збоях і паралельних операціях. Управляється трьома командами: `BEGIN` (старт), `COMMIT` (зафіксувати), `ROLLBACK` (скасувати).
+
+---
+
+#### Базовий синтаксис
+
+```sql
+-- Явна транзакція:
+BEGIN;  -- або START TRANSACTION;
+
+UPDATE accounts SET balance = balance - 500 WHERE id = 1;
+UPDATE accounts SET balance = balance + 500 WHERE id = 2;
+
+COMMIT;   -- зафіксувати обидва UPDATE як єдине ціле
+
+-- або при помилці:
+ROLLBACK; -- скасувати всі зміни з BEGIN
+
+-- Автокоміт (autocommit):
+-- За замовчуванням MySQL виконує кожен запит як окрему транзакцію
+SHOW VARIABLES LIKE 'autocommit';  -- ON за замовчуванням
+
+-- Вимкнути autocommit для сесії:
+SET autocommit = 0;
+UPDATE ...;
+UPDATE ...;
+COMMIT;  -- тепер потрібен явний COMMIT
+
+-- DDL (CREATE, ALTER, DROP) в MySQL неявно закриває транзакцію (implicit commit)
+```
+
+---
+
+#### SAVEPOINT — часткові відкати
+
+```sql
+BEGIN;
+
+INSERT INTO orders (customer_id, amount) VALUES (1, 100);
+SAVEPOINT after_order;
+
+INSERT INTO order_items (order_id, product_id) VALUES (LAST_INSERT_ID(), 99);
+-- Помилка: product_id=99 не існує
+
+ROLLBACK TO SAVEPOINT after_order;
+-- Скасовує тільки INSERT INTO order_items, але order залишається
+
+INSERT INTO order_items (order_id, product_id) VALUES (LAST_INSERT_ID(), 5);
+COMMIT;
+
+-- RELEASE SAVEPOINT after_order;  -- видалити savepoint (необов'язково)
+```
+
+---
+
+#### Типові сценарії
+
+**1. Банківський переказ — класичний приклад**
+```sql
+BEGIN;
+
+-- Перевірити і заблокувати рядок для оновлення
+SELECT balance FROM accounts WHERE id = 1 FOR UPDATE;
+
+-- Якщо balance >= 500:
+UPDATE accounts SET balance = balance - 500 WHERE id = 1;
+UPDATE accounts SET balance = balance + 500 WHERE id = 2;
+
+INSERT INTO transfer_log (from_id, to_id, amount, created_at)
+VALUES (1, 2, 500, NOW());
+
+COMMIT;
+-- Або ROLLBACK при будь-якій помилці
+```
+
+**2. Реєстрація користувача з профілем (1:1)**
+```sql
+BEGIN;
+
+INSERT INTO users (email, password_hash) VALUES ('a@b.com', '...');
+SET @user_id = LAST_INSERT_ID();
+
+INSERT INTO user_profiles (user_id, name, avatar_url)
+VALUES (@user_id, 'Alice', NULL);
+
+-- Якщо будь-який INSERT провалиться → ROLLBACK → не буде "сироти"
+COMMIT;
+```
+
+**3. Списання товару зі складу при замовленні**
+```sql
+BEGIN;
+
+-- Перевірити наявність і заблокувати
+SELECT stock FROM products WHERE id = 5 FOR UPDATE;
+-- Якщо stock >= qty:
+
+UPDATE products SET stock = stock - 2 WHERE id = 5;
+INSERT INTO order_items (order_id, product_id, qty) VALUES (101, 5, 2);
+UPDATE orders SET status = 'confirmed' WHERE id = 101;
+
+COMMIT;
+```
+
+**4. PHP — транзакція з обробкою помилок**
+```php
+$pdo->beginTransaction();
+try {
+    $pdo->exec("UPDATE accounts SET balance = balance - 500 WHERE id = 1");
+    $pdo->exec("UPDATE accounts SET balance = balance + 500 WHERE id = 2");
+    $pdo->commit();
+} catch (Exception $e) {
+    $pdo->rollBack();
+    throw $e;
+}
+```
+
+---
+
+#### Autocommit і неявні транзакції
+
+```sql
+-- MySQL за замовчуванням: кожен запит = окрема транзакція
+UPDATE users SET name = 'Alice' WHERE id = 1;
+-- Автоматично: BEGIN → UPDATE → COMMIT
+
+-- BEGIN явно вимикає autocommit для цього блоку:
+BEGIN;
+UPDATE users SET name = 'Alice' WHERE id = 1;
+-- Ще не закоміщено! Інші сесії не бачать зміни (залежно від isolation level)
+UPDATE users SET email = 'a@a.com' WHERE id = 1;
+COMMIT;
+
+-- DDL завжди викликає implicit COMMIT:
+BEGIN;
+UPDATE users SET name = 'Bob' WHERE id = 1;
+CREATE TABLE temp_test (id INT);  -- ← implicit COMMIT! UPDATE вже не скасуєш
+ROLLBACK;  -- не діє, UPDATE вже закоміщений
+```
+
+---
+
+#### Транзакції і продуктивність
+
+```sql
+-- Довга відкрита транзакція тримає блокування → блокує інших
+-- ❌ Погана практика:
+BEGIN;
+SELECT ... FOR UPDATE;  -- заблокували рядки
+-- ... тут бізнес-логіка в PHP, HTTP-запити, обробка...
+COMMIT;  -- через 30 секунд
+-- Інші сесії чекають 30 секунд
+
+-- ✓ Правило: транзакція має бути якомога коротшою
+-- Всю підготовку робити ДО BEGIN, в транзакції — тільки сам запис
+
+-- Транзакції і bulk insert:
+-- Без явної транзакції: кожен INSERT = окремий COMMIT = дорого
+-- З явною транзакцією: batch insert в одній транзакції = швидко
+BEGIN;
+INSERT INTO logs VALUES (1, 'event1', NOW());
+INSERT INTO logs VALUES (2, 'event2', NOW());
+-- ... тисячі INSERT ...
+COMMIT;
+-- У 10-100 разів швидше ніж окремі autocommit INSERTs
+```
+
+---
+
+#### Перевірка активних транзакцій
+
+```sql
+-- Переглянути активні транзакції (MySQL 8.0+):
+SELECT * FROM information_schema.innodb_trx\G
+
+-- Переглянути блокування:
+SELECT * FROM performance_schema.data_locks;
+
+-- Вбити зависшу транзакцію:
+SHOW PROCESSLIST;
+KILL <process_id>;
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **BEGIN / START TRANSACTION** — починає явну транзакцію, вимикає autocommit для блоку
+- **COMMIT** — фіксує всі зміни, робить їх видимими для інших
+- **ROLLBACK** — скасовує всі зміни з останнього BEGIN
+- **SAVEPOINT** — часткові відкати всередині транзакції
+- **autocommit=ON** (дефолт) — кожен SQL = окрема транзакція
+- **DDL (CREATE/ALTER/DROP)** → implicit COMMIT в MySQL → транзакцію не скасувати
+- **Коротка транзакція** — правило; довгі тримають блокування → деградація паралелізму
+- **Batch insert** в транзакції — у 10-100× швидше ніж окремі autocommit INSERT
+
+</details>
+
+---
+
+<a id="23"></a>
+
+### 23. Що таке ACID і чому ці властивості важливі для транзакційних систем? Поясніть Atomicity, Consistency, Isolation, Durability і практичне значення кожної з них.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+**ACID** — чотири властивості що гарантують надійну обробку транзакцій навіть при збоях системи або паралельному доступі. InnoDB реалізує всі чотири: Atomicity через undo log, Durability через redo log, Isolation через MVCC і блокування, Consistency — як наслідок трьох попередніх разом з constraints.
+
+---
+
+#### A — Atomicity (Атомарність)
+
+**"Все або нічого"** — транзакція або виконується повністю, або не залишає жодних слідів.
+
+```sql
+BEGIN;
+UPDATE accounts SET balance = balance - 500 WHERE id = 1;  -- ✓ виконано
+UPDATE accounts SET balance = balance + 500 WHERE id = 2;  -- ✗ помилка (id=2 не існує)
+-- Без ROLLBACK: перший UPDATE все одно скасовується автоматично
+ROLLBACK;  -- або автоматично при помилці з'єднання/збої сервера
+
+-- Після ROLLBACK: accounts.id=1 має той самий баланс що і до BEGIN
+-- Гроші не "зникли" — або обидва UPDATE, або жоден
+```
+
+**Як InnoDB реалізує:** через **undo log** — перед кожною зміною записує "як було". При ROLLBACK або збої — відновлює попередній стан по undo log.
+
+---
+
+#### C — Consistency (Узгодженість)
+
+**"БД переходить з одного валідного стану в інший"** — всі constraints, правила цілісності, тригери мають виконуватись після транзакції.
+
+```sql
+-- Приклад: таблиця з constraint
+CREATE TABLE accounts (
+    id      INT PRIMARY KEY,
+    balance DECIMAL(10,2) CHECK (balance >= 0)  -- баланс не може бути від'ємним
+);
+
+BEGIN;
+UPDATE accounts SET balance = balance - 1000 WHERE id = 1;  -- balance = -200
+-- Порушує CHECK constraint → транзакція відхиляється
+COMMIT;
+-- БД залишається у валідному стані (balance >= 0 для всіх)
+
+-- Consistency забезпечується:
+-- 1. БД: constraints (FK, UNIQUE, CHECK, NOT NULL), тригери
+-- 2. Застосунком: бізнес-правила (баланс = сума проводок)
+-- Atomicity + Isolation → Consistency автоматично
+```
+
+**Важливо:** C в ACID — єдина властивість що частково покладається на застосунок, не тільки на БД.
+
+---
+
+#### I — Isolation (Ізоляція)
+
+**"Паралельні транзакції не заважають одна одній"** — результат одночасних транзакцій такий самий як якби вони виконувались послідовно.
+
+```sql
+-- Без ізоляції: Transaction 1 читає незафіксовані зміни Transaction 2
+-- T1:                        T2:
+BEGIN;                        BEGIN;
+SELECT balance FROM ...       UPDATE accounts SET balance = 0 ...
+-- T1 бачить balance=0 ?      -- ще не COMMIT
+-- Це "dirty read" — проблема ізоляції
+
+-- InnoDB вирішує через MVCC (Multi-Version Concurrency Control):
+-- Кожна транзакція бачить знімок (snapshot) даних на момент свого старту
+-- Записи не блокують читання
+```
+
+Детальніше — у питанні про рівні ізоляції.
+
+---
+
+#### D — Durability (Тривалість/Довговічність)
+
+**"Закоміщені дані не втрачаються"** — після успішного COMMIT, навіть при збої живлення або краші сервера, дані збережені.
+
+```sql
+BEGIN;
+UPDATE accounts SET balance = 1000 WHERE id = 1;
+COMMIT;  -- ← з цього моменту дані гарантовано збережені
+
+-- Що відбувається при COMMIT в InnoDB:
+-- 1. Запис у redo log (WAL — Write-Ahead Log) на диск (fsync)
+-- 2. Підтвердження клієнту "OK"
+-- 3. Пізніше: дані переносяться з buffer pool на диск (checkpoint)
+
+-- Якщо сервер впаде одразу після COMMIT:
+-- При рестарті InnoDB читає redo log → replay незавершених записів
+-- COMMIT → дані відновлюються ✓
+-- Незакоміщені транзакції → відкочуються через undo log ✓
+```
+
+**Конфігурація надійності:**
+```ini
+# innodb_flush_log_at_trx_commit:
+# 1 (дефолт) — fsync при кожному COMMIT → максимальна надійність, повільніше
+# 2          — запис в OS cache при COMMIT, fsync раз на секунду → ризик втрати 1 сек даних при crash OS
+# 0          — запис раз на секунду → швидко, але втрата до 1 сек даних при будь-якому збої
+
+# sync_binlog:
+# 1 — синхронізувати binlog при кожному COMMIT → надійно
+# 0 — ОС вирішує коли → швидко, але ризик розсинхронізації з репліками
+```
+
+---
+
+#### ACID разом — приклад банківського переказу
+
+```
+Без ACID що може піти не так:
+
+Atomicity:   сервер впав після списання, але до зарахування → гроші зникли
+Consistency: баланс став від'ємним → порушено бізнес-правило
+Isolation:   два менеджери одночасно переказують з одного рахунку → overspending
+Durability:  COMMIT пройшов, але після рестарту даних немає → клієнт в шоці
+
+З ACID:
+✓ Списали і зарахували — або обидва, або жоден (Atomicity)
+✓ Баланс не може стати від'ємним — constraint (Consistency)
+✓ Паралельні перекази не заважають — MVCC + locks (Isolation)
+✓ Після COMMIT — дані на диску назавжди (Durability)
+```
+
+---
+
+#### ACID vs BASE (NoSQL)
+
+| | ACID (SQL) | BASE (NoSQL) |
+|---|---|---|
+| Гарантії | Суворі | Послаблені |
+| Consistency | Immediate | Eventually consistent |
+| Availability | Може жертвувати | Пріоритет |
+| Масштабування | Складніше | Простіше |
+| Приклад | MySQL, PostgreSQL | Cassandra, DynamoDB |
+| Коли | Фінанси, транзакції | Метрики, стрічки, кеш |
+
+**BASE:** Basically Available, Soft state, Eventually consistent — дані врешті-решт стануть узгодженими, але не гарантовано одразу.
+
+---
+
+#### Міні-шпаргалка
+
+- **Atomicity** → undo log; "все або нічого"; збій = автоматичний ROLLBACK
+- **Consistency** → constraints + бізнес-правила застосунку; БД завжди у валідному стані
+- **Isolation** → MVCC + locks; паралельні транзакції не бачать незафіксованих змін одна одної
+- **Durability** → redo log (WAL) + fsync; COMMIT = дані на диску; рестарт → replay redo log
+- `innodb_flush_log_at_trx_commit=1` → повна Durability; `=2` або `=0` → компроміс з продуктивністю
+- **BASE** (NoSQL) — протилежність ACID; жертвує C і I заради масштабованості
+
+</details>
+
+---
+
+<a id="24"></a>
+
+### 24. Чи можлива транзакція всередині транзакції, і як це працює на практиці? Поясніть nested transactions, savepoints та обмеження в реальних СУБД.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+**Справжніх вкладених транзакцій у MySQL немає.** Повторний `BEGIN` всередині активної транзакції неявно робить `COMMIT` поточної і починає нову. Аналог вкладеності — **SAVEPOINT**: дозволяє робити часткові відкати всередині транзакції без скасування всього. PostgreSQL і MSSQL мають обмежену підтримку вкладених транзакцій через `SAVEPOINT`, але справжньої незалежної вкладеності немає в жодній масовій СУБД.
+
+---
+
+#### MySQL: що відбувається при вкладеному BEGIN
+
+```sql
+BEGIN;
+INSERT INTO orders (id, amount) VALUES (1, 100);
+
+BEGIN;  -- ← MySQL робить implicit COMMIT першої транзакції!
+-- orders(1, 100) вже зафіксований і НЕ може бути відкочений
+
+INSERT INTO orders (id, amount) VALUES (2, 200);
+ROLLBACK;  -- скасовує тільки другу транзакцію (id=2)
+-- id=1 залишається у БД
+
+-- Висновок: BEGIN всередині транзакції = завершення попередньої, не вкладення
+```
+
+---
+
+#### SAVEPOINT — практична альтернатива
+
+```sql
+BEGIN;
+
+INSERT INTO users (name) VALUES ('Alice');           -- точка A
+SAVEPOINT sp1;
+
+INSERT INTO orders (user_id, amount) VALUES (1, 500); -- точка B
+SAVEPOINT sp2;
+
+INSERT INTO order_items (order_id, product_id) VALUES (1, 999);
+-- Помилка: product_id=999 не існує
+
+ROLLBACK TO SAVEPOINT sp2;
+-- Відкотились до точки B: order_items скасовано, але users і orders — живі
+
+INSERT INTO order_items (order_id, product_id) VALUES (1, 5); -- виправили
+COMMIT;
+-- Зафіксовано: users(Alice) + orders(500) + order_items(product=5)
+
+-- RELEASE SAVEPOINT sp1;  -- явне видалення savepoint (необов'язково)
+```
+
+**ROLLBACK TO SAVEPOINT не завершує транзакцію** — вона продовжується, просто скасовуються зміни після точки.
+
+---
+
+#### PHP: "вкладені транзакції" через лічильник
+
+Поширений патерн у фреймворках (Laravel, Doctrine) — емулювати вкладеність через лічильник відкритих транзакцій:
+
+```php
+class DB {
+    private int $transactionDepth = 0;
+
+    public function beginTransaction(): void {
+        if ($this->transactionDepth === 0) {
+            $this->pdo->beginTransaction();  // справжній BEGIN
+        } else {
+            $this->pdo->exec("SAVEPOINT sp_{$this->transactionDepth}");
+        }
+        $this->transactionDepth++;
+    }
+
+    public function commit(): void {
+        $this->transactionDepth--;
+        if ($this->transactionDepth === 0) {
+            $this->pdo->commit();  // справжній COMMIT
+        }
+        // Внутрішній "commit" нічого не робить — фіксує зовнішній
+    }
+
+    public function rollback(): void {
+        $this->transactionDepth--;
+        if ($this->transactionDepth === 0) {
+            $this->pdo->rollBack();  // повний ROLLBACK
+        } else {
+            $this->pdo->exec("ROLLBACK TO SAVEPOINT sp_{$this->transactionDepth}");
+        }
+    }
+}
+
+// Використання:
+$db->beginTransaction();   // depth=1, реальний BEGIN
+    $db->beginTransaction(); // depth=2, SAVEPOINT sp_1
+        // ... операції ...
+    $db->commit();           // depth=1, нічого не відбувається
+$db->commit();             // depth=0, реальний COMMIT
+```
+
+---
+
+#### Порівняння СУБД
+
+| СУБД | Вкладений BEGIN | SAVEPOINT | Поведінка |
+|------|-----------------|-----------|-----------|
+| MySQL/MariaDB | Implicit COMMIT | ✓ | BEGIN всередині = завершує поточну |
+| PostgreSQL | Implicit COMMIT | ✓ | Аналогічно MySQL |
+| MSSQL | ✓ (рахує рівні) | ✓ | `@@TRANCOUNT`, але ROLLBACK — повний |
+| Oracle | ✗ | ✓ | BEGIN = DDL, транзакції неявні |
+
+---
+
+#### Міні-шпаргалка
+
+- **MySQL**: справжніх вкладених транзакцій немає; `BEGIN` всередині → implicit COMMIT
+- **SAVEPOINT** — єдиний механізм часткових відкатів; `ROLLBACK TO sp` не закриває транзакцію
+- **Фреймворки** (Laravel/Doctrine) — емулюють вкладеність лічильником + SAVEPOINT
+- **Правило**: якщо метод може викликатись і самостійно, і в межах транзакції — використовуй SAVEPOINT або перевіряй `transactionDepth`
+
+</details>
+
+---
+
+<a id="25"></a>
+
+### 25. Які рівні ізоляції транзакцій існують і чим вони відрізняються? Поясніть Read Uncommitted, Read Committed, Repeatable Read, Serializable.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Рівень ізоляції визначає наскільки одна транзакція "захищена" від змін що вносять інші паралельні транзакції. Існує класичний trade-off: вища ізоляція = менше аномалій, але більше блокувань і нижча паралельність. SQL-стандарт визначає 4 рівні і 3 типи аномалій що вони запобігають.
+
+---
+
+#### Три аномалії паралельного доступу
+
+**Dirty Read** — транзакція читає незафіксовані зміни іншої транзакції.
+```
+T1: UPDATE accounts SET balance = 0 WHERE id = 1;  -- ще не COMMIT
+T2: SELECT balance FROM accounts WHERE id = 1;  -- бачить 0
+T1: ROLLBACK;  -- зміна скасована
+-- T2 прийняла рішення на основі даних що ніколи не існували
+```
+
+**Non-Repeatable Read** — одна транзакція двічі читає той самий рядок і отримує різні значення (бо інша транзакція змінила і зафіксувала його між двома читаннями).
+```
+T1: SELECT balance FROM accounts WHERE id = 1;  -- 1000
+T2: UPDATE accounts SET balance = 500 WHERE id = 1; COMMIT;
+T1: SELECT balance FROM accounts WHERE id = 1;  -- 500 (інший результат!)
+```
+
+**Phantom Read** — одна транзакція двічі виконує запит з умовою і отримує різну кількість рядків (бо інша транзакція вставила або видалила рядки що потрапляють під умову).
+```
+T1: SELECT COUNT(*) FROM orders WHERE amount > 1000;  -- 5
+T2: INSERT INTO orders (amount) VALUES (2000); COMMIT;
+T1: SELECT COUNT(*) FROM orders WHERE amount > 1000;  -- 6 (phantom!)
+```
+
+---
+
+#### Read Uncommitted (рівень 1)
+
+Найнижчий рівень. Транзакція бачить усі незафіксовані зміни інших транзакцій.
+
+```sql
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+
+-- T1:
+BEGIN;
+UPDATE products SET price = 9999 WHERE id = 1;
+-- Ще не COMMIT
+
+-- T2 (паралельно):
+SELECT price FROM products WHERE id = 1;
+-- Повертає 9999 — навіть якщо T1 зробить ROLLBACK
+
+-- Дозволяє: Dirty Read ✓, Non-Repeatable Read ✓, Phantom Read ✓
+```
+
+**Коли використовувати:** майже ніколи. Хіба що для наближених агрегатних звітів де абсолютна точність не критична і важлива швидкість (наприклад, live лічильники відвідувань де ±1 допустимо).
+
+---
+
+#### Read Committed (рівень 2)
+
+Транзакція бачить тільки зафіксовані зміни. Кожен SELECT отримує актуальний snapshot на момент свого виконання.
+
+```sql
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+-- T1:
+BEGIN;
+SELECT balance FROM accounts WHERE id = 1;  -- 1000
+
+-- T2 (паралельно):
+UPDATE accounts SET balance = 500 WHERE id = 1; COMMIT;
+
+-- T1:
+SELECT balance FROM accounts WHERE id = 1;  -- 500 (Non-Repeatable Read!)
+-- Два SELECT в одній транзакції → різні результати
+
+-- Запобігає: Dirty Read ✗
+-- Дозволяє: Non-Repeatable Read ✓, Phantom Read ✓
+```
+
+**Дефолт у:** PostgreSQL, Oracle, MSSQL.
+
+**Коли використовувати:** більшість OLTP застосунків де Non-Repeatable Read прийнятний. Наприклад, кожен запит до БД все одно виконується в окремій транзакції.
+
+---
+
+#### Repeatable Read (рівень 3)
+
+Транзакція бачить snapshot БД на момент свого старту (першого SELECT). Всі повторні SELECT в тій самій транзакції повертають однакові дані незалежно від змін інших транзакцій.
+
+```sql
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+-- Це ДЕФОЛТ для InnoDB / MySQL
+
+-- T1:
+BEGIN;
+SELECT balance FROM accounts WHERE id = 1;  -- 1000  ← snapshot зафіксовано
+
+-- T2 (паралельно):
+UPDATE accounts SET balance = 500 WHERE id = 1; COMMIT;
+
+-- T1:
+SELECT balance FROM accounts WHERE id = 1;  -- 1000  (той самий snapshot!)
+-- Non-Repeatable Read відсутній
+
+-- Але Phantom Read:
+-- T1: SELECT COUNT(*) FROM orders WHERE amount > 100;  -- 5
+-- T2: INSERT INTO orders (amount) VALUES (200); COMMIT;
+-- T1: SELECT COUNT(*) FROM orders WHERE amount > 100;  -- ?
+```
+
+**InnoDB і Phantom Read:** завдяки MVCC і gap locks, InnoDB запобігає Phantom Read навіть на рівні Repeatable Read — це краще за стандарт SQL.
+
+```sql
+-- InnoDB gap lock запобігає вставці в "проміжок":
+SELECT * FROM orders WHERE amount BETWEEN 100 AND 200 FOR UPDATE;
+-- Блокує не тільки існуючі рядки, але й "проміжок" де могли б з'явитись нові
+-- → T2 не може INSERT amount=150 поки T1 активна
+```
+
+**Коли використовувати:** дефолт MySQL/InnoDB; підходить для більшості задач включно з фінансовими операціями.
+
+---
+
+#### Serializable (рівень 4)
+
+Найвищий рівень. Транзакції виконуються так, ніби вони послідовні (серіалізовані), навіть якщо фізично паралельні.
+
+```sql
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+-- InnoDB автоматично перетворює всі SELECT на SELECT ... FOR SHARE
+-- (shared lock на всі прочитані рядки і діапазони)
+
+-- T1:
+BEGIN;
+SELECT SUM(balance) FROM accounts;  -- бере shared lock на всю таблицю
+
+-- T2:
+INSERT INTO accounts (balance) VALUES (1000);
+-- ← БЛОКУЄТЬСЯ! чекає поки T1 завершиться
+
+-- T1:
+COMMIT;
+-- Тепер T2 може продовжити
+
+-- Запобігає: Dirty Read ✗, Non-Repeatable Read ✗, Phantom Read ✗
+-- Ціна: значне зниження паралельності, ризик дедлоків
+```
+
+**Коли використовувати:** звіти і розрахунки де критично важлива 100% консистентність знімку (бухгалтерське закриття, аудит), або при складних бізнес-правилах де будь-яка аномалія неприпустима.
+
+---
+
+#### Порівняльна таблиця
+
+| Рівень | Dirty Read | Non-Repeatable Read | Phantom Read | Паралельність | Дефолт у |
+|--------|:---:|:---:|:---:|---|---|
+| Read Uncommitted | ✓ можливий | ✓ можливий | ✓ можливий | Найвища | — |
+| Read Committed | ✗ | ✓ можливий | ✓ можливий | Висока | PostgreSQL, Oracle |
+| Repeatable Read | ✗ | ✗ | ✓ (стандарт) / ✗ (InnoDB) | Середня | **MySQL/InnoDB** |
+| Serializable | ✗ | ✗ | ✗ | Низька | — |
+
+---
+
+#### Як InnoDB реалізує ізоляцію
+
+**MVCC (Multi-Version Concurrency Control):**
+- Кожен рядок має прихований `DB_TRX_ID` (id транзакції що писала) і `DB_ROLL_PTR` (посилання на undo log)
+- При читанні транзакція бачить версію рядка яка була актуальна на момент її snapshot
+- Читання не блокує запис, запис не блокує читання → висока паралельність
+
+```
+Рядок в таблиці:        id=1, balance=500, trx_id=100
+Undo log:               id=1, balance=1000, trx_id=50  (попередня версія)
+
+T1 (snapshot trx_id < 100):  бачить balance=1000 (стара версія з undo log)
+T2 (snapshot trx_id >= 100): бачить balance=500  (актуальна версія)
+```
+
+**Locking Reads (`FOR UPDATE`, `FOR SHARE`):**
+```sql
+-- FOR UPDATE: exclusive lock, блокує інші читання і записи
+SELECT * FROM orders WHERE id = 1 FOR UPDATE;
+
+-- FOR SHARE (FOR LOCK IN SHARE MODE): shared lock, дозволяє паралельне читання
+SELECT * FROM orders WHERE id = 1 FOR SHARE;
+
+-- При Serializable: MySQL автоматично додає FOR SHARE до всіх SELECT
+```
+
+---
+
+#### Встановлення рівня ізоляції
+
+```sql
+-- Для поточної сесії:
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+-- Для наступної транзакції (один раз):
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+BEGIN;
+...
+
+-- Глобально (для всіх нових з'єднань):
+SET GLOBAL TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+-- Перевірити поточний рівень:
+SELECT @@transaction_isolation;         -- MySQL 5.7.20+
+SELECT @@tx_isolation;                  -- старі версії
+
+-- У конфіг файлі:
+-- transaction-isolation = READ-COMMITTED
+```
+
+---
+
+#### Дедлоки і ізоляція
+
+```sql
+-- При вищих рівнях ізоляції зростає ризик дедлоку:
+
+-- T1:                              T2:
+BEGIN;                              BEGIN;
+SELECT * FROM A FOR UPDATE;         SELECT * FROM B FOR UPDATE;
+SELECT * FROM B FOR UPDATE;         SELECT * FROM A FOR UPDATE;
+-- ← чекає T2 звільнить B          -- ← чекає T1 звільнить A
+-- DEADLOCK! MySQL вбиває одну з транзакцій і повертає помилку 1213
+
+-- Обробка дедлоку в PHP:
+try {
+    $pdo->beginTransaction();
+    // ...
+    $pdo->commit();
+} catch (PDOException $e) {
+    if ($e->getCode() === '40001') {  // deadlock error code
+        $pdo->rollBack();
+        // retry логіка
+    }
+}
+```
+
+---
+
+#### Міні-шпаргалка
+
+- **Read Uncommitted** → dirty reads → майже не використовується
+- **Read Committed** → без dirty reads, але Non-Repeatable Read можливий → дефолт PostgreSQL
+- **Repeatable Read** → snapshot на старт транзакції; InnoDB додатково запобігає Phantom через gap locks → **дефолт MySQL**
+- **Serializable** → повна ізоляція, SELECT стає FOR SHARE → найнижча паралельність
+- **MVCC** → читання не блокує запис; версіонування рядків через undo log
+- **FOR UPDATE** → exclusive lock; **FOR SHARE** → shared lock; при Serializable всі SELECT → FOR SHARE
+- **Дедлок** → MySQL вбиває "дешевшу" транзакцію, код помилки 40001 → завжди обробляти retry
+
+</details>
+
+---
+
+<a id="26"></a>
+
+### 26. Що таке конкурентний доступ до даних у багатокористувацькій системі, які проблеми він створює і як їх вирішують транзакції, рівні ізоляції та механізми блокування? Поясніть dirty read, non-repeatable read, phantom read, lost update, race conditions, lock wait, deadlock, а також роль рівнів ізоляції, locking strategies і практичні підходи до виявлення та зменшення таких проблем.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+У багатокористувацькій системі кілька транзакцій одночасно читають і змінюють ті самі дані. Без захисту виникають аномалії — від некоректних читань до повної втрати даних. СУБД вирішує це двома механізмами: **MVCC** (версіонування — читання не блокує запис) і **блокування** (locks — запис блокує конкурентний запис). Рівні ізоляції визначають який компроміс між коректністю і паралельністю обирається. Розуміння цих аномалій критично важливе для проєктування транзакцій у продакшн системах.
+
+---
+
+#### Аномалії читання
+
+**Dirty Read** виникає коли одна транзакція читає дані що інша ще не зафіксувала. Якщо та транзакція зробить `ROLLBACK` — перша працювала з даними що фактично ніколи не існували. Це найнебезпечніша аномалія: наприклад, система відобразила баланс рахунку на основі незафіксованого поповнення, яке потім було скасоване.
+
+Запобігає: **Read Committed** і вище.
+
+---
+
+**Non-Repeatable Read** виникає коли транзакція двічі читає той самий рядок і отримує різні значення — між читаннями інша транзакція змінила і зафіксувала цей рядок. Це порушує внутрішню консистентність транзакції: вона приймає рішення на основі даних що вже застаріли до кінця її виконання.
+
+```
+T1: SELECT balance → 1000
+T2:   UPDATE balance = 500; COMMIT
+T1: SELECT balance → 500  ← той самий рядок, інше значення
+```
+
+Запобігає: **Repeatable Read** і вище.
+
+---
+
+**Phantom Read** — схожа на Non-Repeatable Read, але стосується не значень рядків, а їх кількості. Транзакція двічі виконує SELECT з умовою і отримує різний набір рядків: між запитами інша транзакція вставила або видалила рядки що потрапляють під умову. Типовий сценарій: транзакція рахує кількість замовлень для прийняття рішення, а за час її роботи хтось додав нові.
+
+Запобігає: **Serializable**. InnoDB Repeatable Read додатково запобігає через **gap locks** — блокування "проміжків" між значеннями де могли б вставитись нові рядки.
+
+---
+
+#### Аномалії запису
+
+**Lost Update** — класична гонка при патерні read-modify-write. Обидві транзакції читають однаковий стан (наприклад, `views = 10`), обидві обчислюють нове значення (`11`), і обидві записують його. Один з UPDATE губиться — замість очікуваного `12` отримуємо `11`.
+
+**Три підходи до вирішення:**
+
+- **Атомарний UPDATE** — `SET views = views + 1`. Читання і запис в одній атомарній операції, гонка принципово неможлива. Найпростіше рішення, підходить для лічильників.
+
+- **Optimistic Locking** — додати колонку `version` до таблиці. При UPDATE перевіряти `WHERE id=1 AND version=5`. Якщо інша транзакція вже змінила рядок — `affected rows = 0`, застосунок повторює спробу. Підходить коли конфлікти рідкі: не блокує, але вимагає retry логіки.
+
+- **Pessimistic Locking** (`SELECT ... FOR UPDATE`) — явно заблокувати рядок перед читанням. Інші транзакції чекатимуть поки lock не звільниться. Підходить коли конфлікти часті і retry дорогий, але знижує паралельність.
+
+---
+
+**Write Skew** — складніша аномалія що виникає навіть при Repeatable Read. Кожна транзакція окремо читає валідний стан і робить валідну зміну, але разом вони порушують інваріант. Приклад: є правило "мінімум 1 лікар на чергуванні". Обидва лікарі одночасно перевіряють чи можна піти — бачать що їх двоє — і обидва відписуються. Жодна транзакція окремо не порушила правило, але разом — так. Вирішується тільки Serializable або явним `FOR UPDATE` на рядках що перевіряються.
+
+---
+
+#### Race Conditions на рівні застосунку
+
+**TOCTOU (Time-of-Check to Time-of-Use)** — між перевіркою умови і записом у коді застосунку інша транзакція встигає змінити дані. Наприклад: перевірити `balance >= amount` → між перевіркою і списанням хтось уже зняв гроші → баланс стає від'ємним.
+
+Рішення — перенести логіку в БД: атомарний `UPDATE ... WHERE balance >= amount` і перевіряти `affected_rows`. Або `SELECT FOR UPDATE` щоб заблокувати рядок на час бізнес-логіки.
+
+---
+
+#### Механізми блокування в InnoDB
+
+InnoDB використовує **row-level locking** — блокує окремі рядки, а не всю таблицю. Це забезпечує набагато вищу паралельність ніж table lock у MyISAM.
+
+**Основні типи блокувань:**
+
+- **Shared lock (S)** — `SELECT ... FOR SHARE`. Кілька транзакцій можуть тримати shared lock одночасно. Блокує тільки записи.
+- **Exclusive lock (X)** — `SELECT ... FOR UPDATE`, будь-який `UPDATE`/`DELETE`. Тільки одна транзакція може тримати X lock. Блокує і читання (FOR SHARE) і записи.
+- **Gap Lock** — блокує "проміжок" між значеннями індексу. Запобігає вставці нових рядків у діапазон. Активний при Repeatable Read — саме завдяки йому InnoDB запобігає Phantom Read без Serializable.
+- **Next-Key Lock** — комбінація row lock + gap lock. Основний тип блокування в InnoDB при Repeatable Read.
+
+**Важливо:** якщо `FOR UPDATE` виконується без індексу — InnoDB змушений блокувати всю таблицю замість окремих рядків. Тому індекс на FK і WHERE колонки критично важливий не тільки для продуктивності, але й для мінімізації блокувань.
+
+---
+
+#### Lock Wait і Deadlock
+
+**Lock Wait** — транзакція намагається отримати lock що тримає інша, і чекає. Якщо очікування перевищує `innodb_lock_wait_timeout` (дефолт 50 секунд) — MySQL повертає помилку 1205. Довге очікування деградує продуктивність: запити накопичуються в черзі, з'єднання вичерпуються.
+
+**Deadlock** — взаємне очікування: T1 тримає lock на A і чекає B, T2 тримає lock на B і чекає A. Жодна не може продовжити. MySQL автоматично виявляє дедлоки і "вбиває" одну транзакцію (обирає ту що змінила менше даних), повертаючи помилку 1213. Це не катастрофа — транзакцію потрібно просто повторити.
+
+**Запобігання дедлокам:**
+
+1. **Єдиний порядок доступу** — всі транзакції завжди блокують таблиці/рядки в одному порядку (завжди A → B, ніколи B → A)
+2. **Короткі транзакції** — ніяких HTTP-запитів, зовнішніх дзвінків між BEGIN і COMMIT; чим менше часу тримається lock, тим менше шансів перетину
+3. **Індекси для FOR UPDATE** — без індексу блокується більше рядків ніж потрібно → вища ймовірність конфлікту
+4. **Retry логіка** — помилки 1213 (deadlock) і 1205 (timeout) мають оброблятись застосунком з повторною спробою і exponential backoff
+
+**Діагностика:** `SHOW ENGINE INNODB STATUS\G` показує останній дедлок. `performance_schema.data_lock_waits` — поточні очікування. `SET GLOBAL innodb_print_all_deadlocks = 1` — логування всіх дедлоків в error log.
+
+---
+
+#### Optimistic vs Pessimistic Locking
+
+| | Pessimistic | Optimistic |
+|---|---|---|
+| Принцип | Заблокувати перед читанням | Перевірити при записі |
+| SQL | `SELECT ... FOR UPDATE` | `WHERE version = :v` |
+| Паралельність | Нижча — блокує інших | Вища — не блокує |
+| Ризик | Deadlock, lock wait | Retry при конфлікті |
+| Коли доцільно | Часті конфлікти, висока ціна retry | Рідкі конфлікти, більшість читань |
+| Приклад | Банківський переказ | Редагування профілю, кошик |
+
+Вибір між ними залежить від **частоти конфліктів**: якщо більшість операцій не конкурують — optimistic ефективніший (менше блокувань). Якщо конфлікти часті — pessimistic не витрачає час на retry.
+
+---
+
+#### Рівні ізоляції як компроміс
+
+Кожен наступний рівень ізоляції усуває одну додаткову аномалію, але за рахунок більшої кількості блокувань і меншої паралельності:
+
+- **Read Uncommitted** → максимальна паралельність, всі аномалії можливі → майже не використовується
+- **Read Committed** → немає dirty reads, але Non-Repeatable і Phantom можливі → дефолт PostgreSQL, підходить для більшості веб-застосунків де кожен запит = окрема транзакція
+- **Repeatable Read** → snapshot на момент старту транзакції, InnoDB ще й запобігає Phantom через gap locks → **дефолт MySQL**, оптимальний для multi-statement транзакцій
+- **Serializable** → повна ізоляція, всі SELECT стають FOR SHARE → мінімальна паралельність, для фінансових звітів і аудиту
+
+---
+
+#### Практичні підходи
+
+1. **Вибір рівня ізоляції під задачу** — не підвищувати рівень безпідставно: кожен крок вгору = менша паралельність
+2. **Атомарні UPDATE** замість read-modify-write для лічильників і простих змін
+3. **Optimistic locking** для операцій де конфлікти рідкі (редагування документів, профілів)
+4. **FOR UPDATE** для критичних операцій з частими конфліктами (платежі, резервування)
+5. **Короткі транзакції** — вся підготовка до BEGIN, в транзакції тільки DML
+6. **Retry при 1213/1205** — обов'язкова обробка в коді застосунку
+7. **Моніторинг** — `innodb_row_lock_waits`, `innodb_deadlocks` в performance_schema
+
+---
+
+#### Міні-шпаргалка
+
+- **Dirty read** — читання незафіксованого; **Non-repeatable** — повторне читання рядка різне; **Phantom** — повторний SELECT різна кількість рядків
+- **Lost Update** — два паралельних read-modify-write; рішення: атомарний UPDATE > optimistic > pessimistic
+- **Write Skew** — аномалія Repeatable Read: кожна транзакція окремо коректна, разом — ні; потрібен Serializable або FOR UPDATE
+- **Gap Lock** — InnoDB блокує проміжки між значеннями при Repeatable Read → запобігає Phantom без Serializable
+- **Lock Wait** (1205) і **Deadlock** (1213) — обидва мають оброблятись retry логікою
+- **Deadlock запобігання** — єдиний порядок блокувань, короткі транзакції, індекси
+- **Pessimistic** (FOR UPDATE) — для частих конфліктів; **Optimistic** (version) — для рідких
+
+</details>
+
+<a id="27"></a>
+
+### 27. Що таке реплікація в базах даних, навіщо вона потрібна, які типи реплікації існують і які в неї обмеження? Поясніть підходи на кшталт master-replica, сценарії для read scaling, проблеми replication lag і consistency issues, а також компроміси між продуктивністю, консистентністю та складністю підтримки.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Реплікація — це механізм синхронізації даних між кількома вузлами бази даних. Головна ідея: одні й ті самі дані зберігаються на двох і більше серверах, що дає відмовостійкість (якщо один вузол падає — система продовжує працювати) і горизонтальне масштабування читання (read scaling — кілька replica обробляють SELECT-запити паралельно).
+
+Реплікацію не варто плутати з backup: replica — це «жива» копія з постійною синхронізацією в реальному часі; backup — знімок на конкретний момент, зазвичай без миттєвого failover.
+
+---
+
+#### Навіщо потрібна реплікація
+
+**Відмовостійкість (High Availability).** Якщо primary вузол виходить з ладу, одна з replica стає новим primary. Без реплікації збій сервера = повна недоступність бази. З реплікацією failover займає секунди-хвилини (залежно від налаштувань автоматизації).
+
+**Read scaling.** Типовий веб-застосунок читає набагато частіше, ніж пише — 90:10 або навіть 99:1. Primary обробляє всі записи, а кілька replica беруть на себе читання. Додавання нових replica — горизонтальне масштабування без змін схеми.
+
+**Географічна близькість.** Replica можна розмістити в іншому датацентрі або регіоні, щоб зменшити latency для користувачів у цьому регіоні. Replica в ЄС обслуговує READ-запити від європейських користувачів без трансатлантичного round-trip.
+
+**Аналітика і звіти без навантаження на primary.** Важкі аналітичні запити (повний скан великих таблиць, агрегації за місяць) можна запускати на dedicated replica, не блокуючи OLTP-навантаження на primary.
+
+---
+
+#### Типи реплікації
+
+**За направленістю потоку даних:**
+
+*Single-leader (master-replica / primary-replica)* — тільки один вузол приймає записи (primary/master), всі інші лише читають (replica/slave). Це найпоширеніша модель у MySQL, PostgreSQL. Проста в реалізації і підтримці, але primary є єдиною точкою відказу для записів і вузьким місцем при Write-heavy навантаженні.
+
+*Multi-leader (multi-master)* — кілька вузлів можуть приймати записи. Replica записує зміни і потім поширює їх на інші вузли. Це дає географічно розподілений запис (кожен регіон пише до свого primary), але з'являється проблема conflict resolution: якщо два вузли одночасно змінюють один рядок — система має вирішити, яка зміна перемагає (last-write-wins, merge, або custom logic). Підтримка значно складніша.
+
+*Leaderless (Dynamo-style)* — немає виділеного primary. Клієнт пише на кілька вузлів одночасно (quorum write: W з N), і читає з кількох вузлів (quorum read: R з N), порівнюючи версії. Якщо W + R > N — гарантована strong consistency. Використовується в Cassandra, DynamoDB, Riak. Надзвичайно відмовостійка, але складна в операції та семантиці.
+
+**За синхронністю передачі даних:**
+
+*Асинхронна реплікація* — primary підтверджує COMMIT клієнту одразу після запису у свій лог, не чекаючи підтвердження від replica. Максимальна продуктивність запису, мінімальна latency. Але є ризик втрати даних: якщо primary падає між COMMIT і реплікацією на replica — ці транзакції зникнуть. Саме тому при failover replica може бути «позаду» primary.
+
+*Синхронна реплікація* — primary чекає підтвердження від replica(s) перед тим як підтвердити COMMIT клієнту. Жодна транзакція не вважається зафіксованою, поки хоча б одна replica не отримала зміни. Гарантує zero data loss при failover, але збільшує latency запису на round-trip час до replica — якщо replica повільна або недоступна, primary «зависає».
+
+*Напівсинхронна реплікація (semi-synchronous)* — компроміс: primary чекає підтвердження від хоча б однієї replica, але не від усіх. MySQL підтримує це з plugin `rpl_semi_sync`. На практиці для більшості систем це оптимальна точка: durability краща ніж async, latency нижча ніж full sync.
+
+**За тим, що реплікується:**
+
+*Statement-based replication (SBR)* — передається сам SQL-запит. Економно по трафіку, але небезпечно: `NOW()`, `RAND()`, `AUTO_INCREMENT` можуть дати різний результат на replica. MySQL підтримує, але з обмеженнями.
+
+*Row-based replication (RBR)* — передаються самі змінені рядки (before/after образи). Безпечніше, але більший обсяг binlog. Дефолт в MySQL 8.0+.
+
+*Mixed replication* — MySQL автоматично обирає між SBR і RBR залежно від запиту.
+
+*Logical replication (PostgreSQL)* — передаються логічні зміни (INSERT/UPDATE/DELETE конкретних рядків) на рівні протоколу, незалежно від внутрішнього storage. Дозволяє реплікувати між різними версіями PostgreSQL або навіть різними СУБД.
+
+*Physical replication (WAL streaming, PostgreSQL)* — передається WAL (Write-Ahead Log) блок за блоком. Replica — точна побайтова копія primary. Не можна реплікувати між різними версіями чи ОС, але максимально надійно.
+
+---
+
+#### Replication Lag і проблеми консистентності
+
+Replication lag — це затримка між тим, коли транзакція зафіксована на primary, і тим, коли вона стає видимою на replica. При асинхронній реплікації lag може бути від мілісекунд до хвилин залежно від навантаження.
+
+**Read-your-own-writes (monotonic reads).** Найпоширеніша проблема на практиці: користувач щойно зберіг форму (запис пішов на primary), одразу ж отримує сторінку (читання прийшло з replica), і не бачить своїх змін. Виглядає як «дані зникли». Типові рішення:
+- після запису читати з primary протягом N секунд або до моменту, коли replica доженеться
+- «sticky» роутинг: конкретний користувач завжди читає з одного і того самого вузла
+- перевіряти `binlog position` і читати з replica лише якщо вона досягла потрібної позиції
+
+**Phantom writes при failover.** При async реплікації, якщо primary падає і нова primary (колишня replica) відстає на N транзакцій — ці транзакції втрачені. Клієнт отримав підтвердження, але даних немає. Для критичних даних (платежі, замовлення) необхідна sync або semi-sync реплікація.
+
+**Monotonic read anomaly.** Якщо клієнт читає по черзі з різних replica з різним lag — він може «побачити минуле»: спочатку отримав нові дані з одного replica, потім старіші з іншого. Рішення — sticky routing до одного replica в межах сесії.
+
+**Split-brain.** При multi-master або автоматичному failover може виникнути ситуація де два вузли вважають себе primary і обидва приймають записи. Дані розходяться. Вирішується через fencing (STONITH — Shoot The Other Node In The Head): при переключенні старий primary примусово ізолюється від мережі або вимикається.
+
+---
+
+#### Master-replica на практиці (MySQL)
+
+MySQL реплікація побудована на binlog (binary log) — журналі всіх змін на primary. Replica підключається до primary, читає binlog через I/O thread і записує у свій relay log. SQL thread застосовує relay log локально.
+
+Моніторинг стану реплікації на replica:
+```sql
+SHOW REPLICA STATUS\G
+-- Ключові поля:
+-- Seconds_Behind_Source: 0  -- lag у секундах (0 = без відставання)
+-- Replica_IO_Running: Yes    -- з'єднання з primary активне
+-- Replica_SQL_Running: Yes   -- застосування змін активне
+-- Last_Error: ''             -- наявність помилок
+```
+
+`Seconds_Behind_Source` — приблизна оцінка. Точніший моніторинг через Percona pt-heartbeat або власні heartbeat-таблиці: primary пише поточний timestamp у спеціальну таблицю раз на секунду, replica читає її і порівнює.
+
+---
+
+#### Routing запитів
+
+В реальній системі потрібен механізм, що направляє READ на replica і WRITE на primary. Можливі підходи:
+
+*На рівні застосунку* — два окремих connection pool: write pool → primary, read pool → одна або кілька replica по round-robin. Розробник явно обирає пул або через конфігурацію ORM. Максимальний контроль, але є ризик помилки (написав SELECT до write pool — навантажує primary).
+
+*ProxySQL / HAProxy* — proxy між застосунком і БД, що аналізує запити і автоматично маршрутизує по правилах. ProxySQL розуміє SQL і може маршрутизувати по типу запиту, навантаженню, правилах. Застосунок бачить одну endpoint — proxy бере на себе логіку routing і connection pooling.
+
+*DNS-based* — CNAME `db-read.example.com` вказує на кілька replica IP з round-robin або weighted. Просто, але DNS TTL не дозволяє швидко реагувати на збої вузлів.
+
+---
+
+#### Failover і High Availability
+
+При падінні primary потрібно:
+1. Визначити нового primary (та replica, яка найбільше доганяла)
+2. Переключити інші replica на нового primary
+3. Переключити трафік застосунку (оновити DNS або VIP)
+
+Ручний failover — повільний і схильний до помилок. Автоматизовані рішення:
+- **MySQL Router + InnoDB Cluster (Group Replication)** — вбудоване рішення MySQL для автоматичного failover з консенсусом через Paxos-подібний протокол
+- **Orchestrator** (Percona) — зовнішній менеджер реплікації, моніторить топологію і виконує failover за правилами
+- **ProxySQL** — може інтегруватись з Orchestrator для автоматичного переключення backend
+
+Важливо: при автоматичному failover завжди є короткий downtime (кілька секунд до кількох хвилин). RPO (Recovery Point Objective) залежить від типу реплікації — при async може бути втрата останніх транзакцій.
+
+---
+
+#### Компроміси: продуктивність vs консистентність vs складність
+
+**Асинхронна реплікація:**
+- Продуктивність запису: максимальна (primary не чекає replica)
+- Консистентність: eventual — replica може відставати
+- Складність: мінімальна
+- Ризик: втрата даних при failover (транзакції що не встигли реплікуватись)
+- Підходить: більшість веб-застосунків де читання з невеликою затримкою прийнятне
+
+**Синхронна реплікація:**
+- Продуктивність запису: знижена — latency = latency primary + round-trip до replica
+- Консистентність: сильна — жодна транзакція не зафіксована без підтвердження replica
+- Складність: середня
+- Ризик: якщо replica недоступна — primary зупиняється (або переходить в async fallback)
+- Підходить: фінансові транзакції, критичні дані де втрата неприпустима
+
+**Semi-synchronous:**
+- Продуктивність: між async і sync (незначне збільшення latency)
+- Консистентність: краща ніж async, але не повна — тільки одна replica підтверджує
+- Рекомендований компроміс для більшості production систем
+
+**Multi-master:**
+- Продуктивність запису: висока (можна писати в будь-який вузол)
+- Консистентність: складно гарантувати — conflict resolution потрібен
+- Складність: висока — потрібен механізм виявлення і вирішення конфліктів
+- Підходить: географічно розподілені системи де latency запису критична
+
+---
+
+#### Таблиця порівняння типів реплікації
+
+| Тип | Втрата даних | Latency запису | Складність | Use case |
+|---|---|---|---|---|
+| Async | Можлива | Мінімальна | Низька | Більшість веб-застосунків |
+| Semi-sync | Мінімальна | Незначно вища | Середня | Production з вимогами до durability |
+| Sync | Нуль | Вища | Середня | Фінанси, критичні дані |
+| Multi-master | Конфлікти | Мінімальна | Висока | Geo-distributed writes |
+| Leaderless | Залежить від quorum | Залежить від W | Дуже висока | Cassandra, DynamoDB сценарії |
+
+---
+
+#### Обмеження реплікації
+
+Реплікація не вирішує проблему write scaling. Якщо система впирається у запис — кількість replica не допоможе; потрібен sharding або вертикальне масштабування primary.
+
+Replica не є заміною backup. Видалення даних або DROP TABLE миттєво реплікується на всі replica. Backup потрібен окремо.
+
+Replica потребує ресурсів. SQL thread на replica виконує ті самі операції що й на primary — replica потребує схожі ресурси. На навантажених системах replica може не встигати — lag зростає.
+
+Читання зі застарілих replica може порушити бізнес-логіку. Показувати старий баланс рахунку або старий залишок товару — неприпустимо в деяких сценаріях. Потрібен свідомий вибір: читати з primary або з replica.
+
+---
+
+#### Практичні рекомендації
+
+1. **Почати з async + semi-sync** — для більшості систем semi-synchronous реплікація в MySQL це оптимальний старт: мінімальна втрата даних, незначне збільшення latency
+2. **Окрема replica для аналітики** — важкі звіти і OLAP-запити на dedicated replica, щоб не заважати OLTP-трафіку
+3. **Read-your-own-writes** — явно проєктувати: після будь-якого запису читання критичних даних йде на primary або через перевірку replication position
+4. **Моніторити lag** — alert на `Seconds_Behind_Source > 30` (або менше залежно від вимог); lag що зростає = ознака перевантаження replica
+5. **Тестувати failover** — автоматичний failover потрібно регулярно тестувати в staging, щоб переконатись що він реально працює і RPO/RTO в межах вимог
+6. **Не писати в replica** — навіть якщо MySQL дозволяє (read_only=0), випадковий запис в replica ламає топологію і може спричинити split-brain
+
+---
+
+#### Міні-шпаргалка
+
+- **Реплікація** — синхронізація даних між вузлами; дає HA + read scaling, але не write scaling
+- **Async** — primary не чекає replica → мінімальна latency, можлива втрата даних при failover
+- **Sync** — primary чекає підтвердження → zero data loss, вища latency запису
+- **Semi-sync** — підтвердження від 1 replica → компроміс, рекомендований для production
+- **Replication lag** — replica відстає від primary; `Seconds_Behind_Source` в `SHOW REPLICA STATUS`
+- **Read-your-own-writes** — користувач не бачить свій щойно збережений запис через lag на replica
+- **Split-brain** — два вузли вважають себе primary; вирішується через fencing
+- **Multi-master** — кілька primary, потрібен conflict resolution; складніше але дає geo-distributed writes
+- **Реплікація ≠ backup** — DELETE реплікується миттєво; backup окремо
+
+</details>
+
+<a id="28"></a>
+
+### 28. Що таке партиціювання таблиць, які задачі воно вирішує і які проблеми може створювати? Поясніть, як працює partition pruning, які бувають типи partitioning та коли партиціювання може не дати очікуваного ефекту.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Партиціювання (partitioning) — це розподіл однієї логічної таблиці на кілька фізичних частин (партицій) за певним правилом. З точки зору застосунку таблиця виглядає як єдина сутність, але фізично дані зберігаються в окремих сегментах. MySQL реалізує партиціювання на рівні storage engine для InnoDB і MyISAM.
+
+Партиціювання вирішує переважно дві задачі: **продуктивність запитів** на великих таблицях через partition pruning і **керування життєвим циклом даних** через швидке видалення старих партицій. Для всього іншого (write scaling, розподіл між серверами) партиціювання не підходить — для цього є sharding.
+
+---
+
+#### Типи партиціювання
+
+**RANGE partitioning** — рядки розподіляються за діапазонами значень партиційного ключа. Найпоширеніший тип, особливо для часових даних:
+
+```sql
+CREATE TABLE orders (
+    id       BIGINT,
+    amount   DECIMAL(10,2),
+    created  DATE NOT NULL
+)
+PARTITION BY RANGE (YEAR(created)) (
+    PARTITION p2022 VALUES LESS THAN (2023),
+    PARTITION p2023 VALUES LESS THAN (2024),
+    PARTITION p2024 VALUES LESS THAN (2025),
+    PARTITION p_future VALUES LESS THAN MAXVALUE
+);
+```
+
+Запит `WHERE created BETWEEN '2023-01-01' AND '2023-12-31'` торкнеться лише партиції `p2023` — решта ігноруються (pruning). Видалення всіх даних за 2022 рік: `ALTER TABLE orders DROP PARTITION p2022` — миттєво, замість `DELETE FROM orders WHERE YEAR(created) = 2022` який сканує і пише undo log.
+
+**LIST partitioning** — рядки розподіляються за конкретним переліком значень. Підходить для категоріальних атрибутів:
+
+```sql
+PARTITION BY LIST (region_id) (
+    PARTITION p_west  VALUES IN (1, 2, 3),
+    PARTITION p_east  VALUES IN (4, 5, 6),
+    PARTITION p_other VALUES IN (7, 8, 9)
+);
+```
+
+Запит із `WHERE region_id IN (1, 2)` торкнеться тільки `p_west`. Якщо вставити значення, якого немає ні в одній партиції — MySQL поверне помилку, тому зазвичай потрібна catch-all партиція або контроль на рівні застосунку.
+
+**HASH partitioning** — MySQL обчислює хеш від партиційного ключа і рівномірно розподіляє рядки між N партиціями:
+
+```sql
+PARTITION BY HASH (id)
+PARTITIONS 8;
+```
+
+Рядки розподілені рівномірно, але pruning неможливий — запит за `id = 42` все одно потрапить лише в одну партицію (MySQL обчислить `42 % 8 = 2`), але запит за діапазоном або без партиційного ключа сканує всі. Мета HASH — рівномірний розподіл запису між партиціями, а не pruning. `LINEAR HASH` використовує степінь двійки і дозволяє додавати партиції без перерозподілу всіх даних.
+
+**KEY partitioning** — схоже на HASH, але MySQL використовує власну хеш-функцію (а не довільний вираз). Може застосовуватись до текстових стовпців і PRIMARY KEY автоматично:
+
+```sql
+PARTITION BY KEY ()   -- порожні дужки = PRIMARY KEY
+PARTITIONS 4;
+```
+
+**RANGE COLUMNS / LIST COLUMNS** — розширення RANGE і LIST для кількох стовпців і нечислових типів (рядки, дати). Дозволяє партиціювати за `(year, month)` як кортежем або за VARCHAR значеннями напряму.
+
+---
+
+#### Як працює Partition Pruning
+
+Partition pruning — це оптимізація, при якій MySQL визначає до виконання запиту, які партиції можуть містити потрібні рядки, і виключає решту зі сканування. Це відбувається на стадії query planning, до реального читання даних.
+
+Pruning спрацьовує коли:
+- `WHERE` містить умову на партиційний ключ з константним значенням або діапазоном
+- Для RANGE: `WHERE created >= '2023-01-01'` → MySQL знає що `p2022` не може містити таких рядків
+- Для LIST: `WHERE region_id = 5` → MySQL знає що лише `p_east` може містити `region_id = 5`
+- Для HASH/KEY: лише точна рівність (`WHERE id = 42`) дозволяє вирахувати конкретну партицію
+
+Pruning **не спрацьовує** коли:
+- Умова містить функцію над партиційним ключем: `WHERE YEAR(created) = 2023` при `PARTITION BY RANGE (created)` — MySQL не може автоматично розкласти функцію назад; якщо ж `PARTITION BY RANGE (YEAR(created))` — спрацює
+- Умова порівнює два стовпці між собою: `WHERE created > updated`
+- Партиційний ключ не входить у `WHERE` взагалі — повне сканування всіх партицій
+- Підзапит або змінна замість константи в умові (MySQL не завжди може визначити значення на стадії planning)
+
+Перевірити pruning можна через `EXPLAIN`:
+```sql
+EXPLAIN SELECT * FROM orders WHERE created = '2023-06-15'\G
+-- partitions: p2023   ← лише одна партиція
+```
+
+---
+
+#### Задачі, які вирішує партиціювання
+
+**Швидке видалення старих даних (data lifecycle management).** Це найціннішій практичний сценарій. `ALTER TABLE logs DROP PARTITION p2022` виконується за мілісекунди незалежно від кількості рядків у партиції — фізично видаляється файл. Натомість `DELETE FROM logs WHERE created < '2023-01-01'` на таблиці з мільярдом рядків — це години роботи, величезний undo log, блокування і навантаження на I/O. Для систем з rolling window retention (зберігаємо 12 місяців, старше видаляємо) RANGE по часу + DROP PARTITION є стандартним підходом.
+
+**Зменшення обсягу сканування через pruning.** Якщо запити завжди фільтрують за партиційним ключем, замість індексу по 1 млрд рядків MySQL сканує індекс лише по 100 млн (якщо 10 партицій). Розмір B-Tree менший → більше влазить у buffer pool → менше disk I/O.
+
+**Паралельне сканування.** Деякі операції (наприклад `CHECK TABLE`) MySQL може виконувати паралельно по партиціях. Але це не є надійною перевагою і залежить від версії.
+
+---
+
+#### Проблеми і обмеження партиціювання
+
+**Партиційний ключ обов'язково має входити в PRIMARY KEY.** Це технічне обмеження MySQL: якщо таблиця партиційована, партиційний ключ повинен бути частиною PRIMARY KEY або будь-якого UNIQUE індексу. Якщо `orders` партиційована по `created`, то PRIMARY KEY має бути `(id, created)`, а не просто `(id)`. Це порушує звичні схеми і ускладнює зовнішні ключі — FOREIGN KEY на партиційовані таблиці MySQL не підтримує взагалі.
+
+**Запити без партиційного ключа у WHERE сканують всі партиції.** Якщо таблиця партиційована по `created`, але запит шукає `WHERE user_id = 123` — MySQL змушений переглянути кожну партицію по черзі. Це може бути повільніше ніж один B-Tree індекс на непартиційованій таблиці, бо накладні витрати на відкриття кожної партиції додаються.
+
+**Ліміт 8192 партицій** (MySQL 8.0). На практиці підтримка великої кількості партицій сама по собі потребує ресурсів: кожна партиція = окремий `.ibd` файл, metadata у словнику, overhead при відкритті підключення. Більше ~200 партицій починає помітно впливати на performance DDL і startup.
+
+**Глобальні унікальні індекси неможливі.** Якщо партиційний ключ не входить у UNIQUE, MySQL не може гарантувати унікальність глобально — він перевіряє унікальність лише в межах партиції. Тому email-унікальність на партиційованій таблиці неможлива якщо `email` не є частиною партиційного ключа.
+
+**ALTER TABLE для реструктуризації може бути дорогим.** Додати нову партицію у RANGE-таблиці — дешево (`ALTER TABLE ... ADD PARTITION`). Але змінити кількість HASH-партицій або перерозподілити RANGE — це `REORGANIZE PARTITION`, який фізично переміщує дані. На великій таблиці — тривала операція.
+
+**Subpartitioning (composite partitioning)** підтримується лише в обмеженому наборі комбінацій (RANGE+HASH, LIST+HASH) і рідко виправдовує додаткову складність.
+
+---
+
+#### Коли партиціювання не дає очікуваного ефекту
+
+Найпоширеніша помилка — партиціювати таблицю без аналізу реальних запитів і чекати автоматичного прискорення. Ефект не проявляється або негативний в таких сценаріях:
+
+*Запити не фільтрують за партиційним ключем.* Якщо 90% запитів до таблиці `orders` шукають `WHERE user_id = ?`, а таблиця партиційована по `created` — pruning не спрацьовує. MySQL сканує всі партиції, плюс overhead на їх відкриття. Результат — повільніше ніж без партиціювання з індексом на `user_id`.
+
+*Таблиця недостатньо велика.* Overhead на metadata і відкриття партицій помітний на маленьких таблицях. Партиціювання починає приносити користь від ~tens of millions рядків, і то лише якщо є правильні запити.
+
+*Функція над партиційним ключем у WHERE.* `WHERE DATE(created_at) = '2023-06-15'` не дає pruning навіть якщо таблиця партиційована по `created_at`. Потрібно `WHERE created_at >= '2023-06-15' AND created_at < '2023-06-16'`.
+
+*Очікування write scaling.* Партиціювання не розподіляє запис між різними серверами — все ще один MySQL instance. InnoDB buffer pool і disk I/O shared між партиціями. Якщо проблема — пропускна здатність запису, рішення — sharding, а не partitioning.
+
+*Невдало обраний партиційний ключ дає hotspot.* Якщо більшість нових записів йдуть в останню партицію (наприклад, RANGE по `created` і всі нові записи за поточний місяць) — ця партиція стає hotspot: вся навантаження запису на ній, тоді як решта не активні.
+
+---
+
+#### Партиціювання vs Sharding
+
+Партиціювання і sharding часто плутають, але це різні речі:
+
+| | Partitioning | Sharding |
+|---|---|---|
+| Де відбувається | Всередині одного MySQL instance | Між різними серверами |
+| Прозорість для застосунку | Повна (одна таблиця) | Часткова (потрібна логіка routing) |
+| Write scaling | Ні | Так |
+| Read scaling | Обмежено (pruning) | Так |
+| Складність | Помірна | Висока |
+| Типовий use case | Lifecycle management, pruning | Горизонтальне масштабування |
+
+---
+
+#### Практичні рекомендації
+
+1. **RANGE по часу + DROP PARTITION** — найцінніший і найпростіший сценарій. Для логів, подій, транзакцій з rolling retention завжди варто розглядати.
+2. **Переконатись що WHERE містить партиційний ключ** — перед впровадженням проаналізувати top-N запити і переконатись що вони фільтрують за обраним ключем.
+3. **EXPLAIN з полем partitions** — завжди перевіряти що pruning реально спрацьовує на реальних запитах.
+4. **Не більше ~100-200 партицій** — для більшості систем. Granularity по місяцях краща ніж по днях.
+5. **Враховувати обмеження PRIMARY KEY** — схема має бути спроєктована з урахуванням партиційного ключа у складі PK від початку; retrofit на існуючу схему складніший.
+6. **Не партиціювати заради партиціювання** — якщо таблиця не терабайтна і запити ефективно покриті індексами, партиціювання додасть лише складності.
+
+---
+
+#### Міні-шпаргалка
+
+- **Partitioning** — фізичний розподіл таблиці на сегменти за правилом; логічно одна таблиця
+- **RANGE** — за діапазонами (часто по часу); **LIST** — за переліком значень; **HASH/KEY** — рівномірний розподіл
+- **Partition pruning** — оптимізатор виключає нерелевантні партиції; спрацьовує лише якщо `WHERE` містить партиційний ключ напряму (без функцій)
+- **Головний use case** — `DROP PARTITION` для миттєвого видалення старих даних замість дорогого `DELETE`
+- **Не дає ефекту** якщо запити не фільтрують за партиційним ключем → повне сканування всіх партицій
+- **Обмеження MySQL**: партиційний ключ входить у PRIMARY KEY; немає FOREIGN KEY на партиційовані таблиці; глобальна унікальність неможлива без партиційного ключа у UNIQUE
+- **Partitioning ≠ Sharding**: partitioning — один сервер, немає write scaling; sharding — кілька серверів
+
+</details>
+
+<a id="29"></a>
+
+### 29. Що таке шардінг, коли він потрібен і які складнощі з'являються після його впровадження? Поясніть розподіл даних, складність join-ів, транзакцій між шардами та routing запитів.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Шардінг (sharding) — це горизонтальне масштабування бази даних шляхом розподілу даних між кількома незалежними серверами (шардами). Кожен шард містить лише частину даних, але є повноцінним MySQL-інстансом зі своїм storage, процесором і пам'яттю. На відміну від реплікації (де кожна replica — повна копія) і партиціювання (де розподіл відбувається всередині одного сервера), шардінг — єдиний спосіб горизонтально масштабувати запис.
+
+Шардінг — це архітектурне рішення з серйозними наслідками. Він вирішує проблему масштабування, але додає фундаментальну складність, яку неможливо «відкотити» без міграції всіх даних. Тому шардінг вводять тільки тоді, коли вертикальне масштабування і оптимізація вичерпані.
+
+---
+
+#### Коли шардінг потрібен
+
+Шардінг виправданий коли вертикальне масштабування досягло межі або стало нерентабельним. Конкретні сигнали:
+
+- Обсяг даних перевищує розумні межі одного сервера (сотні гігабайт — терабайти, де навіть індекси не влазять у RAM)
+- Write throughput впирається в I/O або CPU одного сервера, і додаткові replica не допомагають (вони не зменшують навантаження запису)
+- Latency запису зростає навіть при нормальному навантаженні через перевантаження primary
+- Вартість вертикального масштабування (наступний тир сервера) стає вищою ніж вартість підтримки шардованої архітектури
+
+Шардінг **не потрібен** якщо проблема — в повільних запитах (рішення: індекси, оптимізація), у read навантаженні (рішення: replica), в розмірі таблиці що ефективно покривається партиціюванням. Preemptive sharding — поширена помилка: система ніколи не доросте до потреби в шардінгу, але складність залишиться назавжди.
+
+---
+
+#### Стратегії розподілу даних (shard keys)
+
+Вибір shard key — найважливіше рішення в шардованій архітектурі. Від нього залежить рівномірність розподілу, ефективність routing і складність cross-shard операцій.
+
+**Range sharding** — дані розподіляються за діапазонами значень shard key. Наприклад, `user_id 1–1M` → shard 1, `1M–2M` → shard 2. Переваги: range-запити всередині одного шарду ефективні; легко додати новий шард для нового діапазону. Недоліки: гарячий шард (hotspot) — якщо нові записи мають зростаючий ID, весь write-трафік іде в останній шард, решта простоюють.
+
+**Hash sharding** — shard визначається як `hash(shard_key) % N`. Розподіл рівномірний, hotspot відсутній. Але range-запити (`WHERE user_id BETWEEN ...`) потребують звернення до всіх шардів. Також додавання нового шарду вимагає зміни N і перерозподілу майже всіх даних — якщо не використовується consistent hashing.
+
+**Consistent hashing** — шарди розміщуються на «кільці» хеш-значень. При додаванні/видаленні шарду переміщується лише ~1/N даних, а не все. Використовується в Cassandra, DynamoDB, Riak. Для MySQL зазвичай реалізується через проміжний шар (ProxySQL, Vitess).
+
+**Directory-based sharding** — окрема lookup-таблиця (shard map) зберігає відповідність `shard_key → shard_id`. Максимальна гнучкість: можна перемістити конкретного tenant на інший шард без зміни логіки хешування. Недолік: lookup-сервіс стає critical single point — якщо він недоступний, вся система зупиняється; потребує кешування.
+
+**Tenant-based sharding (geo/customer)** — кожен великий клієнт або регіон отримує свій шард. Природна ізоляція: проблема одного tenant не впливає на інших. Але шарди нерівномірні — один великий tenant може перевантажити свій шард.
+
+---
+
+#### Routing запитів
+
+Після шардування система має знати, на який шард направити кожен запит. Є три рівні де може відбуватись routing:
+
+**На рівні застосунку.** Застосунок сам обчислює shard для кожного запиту (`shardId = userId % N`) і тримає окремий connection pool на кожен шард. Максимальний контроль і мінімальна latency (немає проміжного шару). Але бізнес-логіка переплітається з логікою routing; зміна кількості шардів потребує deploy застосунку.
+
+**Через middleware (ProxySQL, Vitess, MySQL Router).** Застосунок підключається до proxy як до звичайного MySQL. Proxy аналізує запити, визначає шард і маршрутизує. Vitess (використовується в YouTube, GitHub, Slack) реалізує повноцінний sharding-шар поверх MySQL з власним query planner для cross-shard запитів. ProxySQL простіший — маршрутизує по правилах, але cross-shard логіку не обробляє.
+
+**Через сам застосунок з shard map.** Окремий сервіс або кешована таблиця `{entity_id → shard}`. Гнучко, але shard map стає критичною залежністю.
+
+**Scatter-gather** — для запитів що не містять shard key (наприклад `WHERE email = ?` якщо шардинг по `user_id`) система відправляє запит на всі шарди паралельно і об'єднує результати. Дорого, але іноді неминуче. Зменшується індексуванням email у спеціальній lookup-таблиці на окремому сервері.
+
+---
+
+#### Cross-shard JOIN
+
+Це один з найболючіших наслідків шардінгу. JOIN між таблицями з різних шардів неможливо виконати на рівні MySQL — дані фізично на різних серверах.
+
+Рішення і компроміси:
+
+*Денормалізація.* Дублювати дані разом з тими записами, що їх потребують. Якщо `orders` і `users` на різних шардах — зберігати `user_name` і `user_email` прямо в таблиці `orders`. Читання ефективне, але дані дублюються і можуть розсинхронізуватись.
+
+*Application-level JOIN.* Застосунок робить два запити: спочатку отримує дані з одного шарду, потім формує список ID і запитує другий шард (`WHERE id IN (...)`). Це N+1 у міжшардному варіанті. Прийнятно для невеликих наборів, але не для аналітики.
+
+*Global/reference tables.* Маленькі довідникові таблиці (`countries`, `categories`, `currencies`) дублюються на кожному шарді. Зміна довідника потребує оновлення на всіх шардах — зазвичай через реплікацію або спеціальний broadcast mechanism.
+
+*Dedicated analytics replica.* Окремий сервер (або DWH — ClickHouse, BigQuery) куди реплікуються дані з усіх шардів. Аналітичні JOIN і агрегації йдуть туди, не впливаючи на OLTP-шарди.
+
+---
+
+#### Розподілені транзакції
+
+Транзакція що зачіпає кілька шардів — one of the hardest problems у розподілених системах.
+
+**Two-Phase Commit (2PC).** Координатор спочатку відправляє PREPARE на всі шарди (фаза 1), чекає підтвердження, потім COMMIT (фаза 2). Гарантує атомарність. Але: якщо координатор падає між PREPARE і COMMIT — шарди залишаються в підвішеному стані (in-doubt transactions) і заблоковані до відновлення координатора. Висока latency (два round-trip). MySQL XA-транзакції реалізують 2PC, але мають відомі проблеми з надійністю і рідко використовуються в production.
+
+**Saga pattern.** Транзакція розбивається на послідовність локальних транзакцій на кожному шарді з компенсуючими операціями у разі відмови. Якщо крок 3 з 5 провалився — виконуються компенсації для кроків 2 і 1. Немає глобального блокування, масштабується добре. Але логіка компенсацій складна, і між кроками є вікно неконсистентності — це eventual consistency по суті.
+
+**Уникати cross-shard транзакцій.** Найпрактичніше рішення — проєктувати схему так, щоб транзакції завжди залишались в межах одного шарду. Якщо `user_id` — shard key, то всі дані одного користувача (профіль, замовлення, платежі) мають бути на тому самому шарді. Транзакція «списати гроші і створити замовлення» тоді є локальною.
+
+---
+
+#### Resharding: додавання нових шардів
+
+Коли поточні шарди перевантажені, потрібно додати нові. Це одна з найболючіших операцій:
+
+При **hash sharding** зміна `N` (кількості шардів) змінює результат `hash % N` для більшості ключів. Потрібно перемістити ~(N-1)/N всіх даних на нові шарди. На великих обсягах це тривала міграція з double-write (пишемо в обидва місця під час переходу) і поступовим переключенням трафіку.
+
+При **consistent hashing** переміщується лише ~1/N даних — набагато легше.
+
+При **range sharding** новий шард додається для нового діапазону, але якщо гарячий старий шард потрібно розбити — також потрібна міграція.
+
+**Vitess** вирішує цю проблему через vschema і vtgate: resharding відбувається онлайн через процес vreplication з мінімальним downtime.
+
+---
+
+#### Складнощі в production
+
+**Глобальна унікальність ID.** `AUTO_INCREMENT` на кожному шарді буде генерувати однакові ID — колізія. Потрібен глобальний ID-генератор: UUID v4 (128-bit, немає колізій, але великий і неупорядкований), Snowflake ID (64-bit timestamp+machine+sequence — упорядкований, від Twitter), ULIDulid (упорядкований UUID-аналог), або централізований sequence-сервіс.
+
+**Агрегації і глобальні запити.** `COUNT(*)` по всіх замовленнях, `MAX(created_at)`, глобальна сортування — потребують scatter-gather по всіх шардах і merge результатів на рівні застосунку або middleware. `ORDER BY + LIMIT` особливо болісний: потрібно отримати `LIMIT` рядків з кожного шарду, об'єднати, пересортувати, взяти перші N.
+
+**Схемні міграції.** `ALTER TABLE` потрібно виконати на всіх шардах. Зазвичай через rolling migration з backward-compatible змінами або за допомогою Vitess/gh-ost що виконують DDL онлайн.
+
+**Моніторинг.** Замість моніторингу одного сервера — N серверів. Потрібна агрегація метрик і логів, централізоване alerting.
+
+---
+
+#### Шардінг vs Партиціювання vs Реплікація
+
+| | Replication | Partitioning | Sharding |
+|---|---|---|---|
+| Де | Кілька серверів | Один сервер | Кілька серверів |
+| Read scaling | Так | Обмежено (pruning) | Так |
+| Write scaling | Ні | Ні | Так |
+| Cross-entity JOIN | Легко | Легко | Складно |
+| Транзакції | Локальні | Локальні | Розподілені (складно) |
+| Складність | Низька | Помірна | Висока |
+| Коли | Read-heavy, HA | Lifecycle + pruning | Write bottleneck |
+
+---
+
+#### Практичні рекомендації
+
+1. **Шардінг — останній крок.** Спочатку: індекси → query оптимізація → вертикальне масштабування → read replica → кешування → партиціювання. Шардінг лише якщо все вище недостатньо.
+2. **Вибір shard key визначає все.** Ключ має гарантувати рівномірний розподіл і мінімізувати cross-shard операції. Ідеально — всі пов'язані дані одного entity на одному шарді.
+3. **Consistent hashing або directory-based** — якщо передбачається resharding, hash % N катастрофічний; краще consistent hashing або shard map.
+4. **Уникати cross-shard транзакцій** на рівні дизайну. Якщо вони неминучі — Saga pattern, не 2PC.
+5. **Глобальний ID-генератор з першого дня** — Snowflake або ULID, не AUTO_INCREMENT.
+6. **Vitess або аналог** для серйозних production сценаріїв — hand-rolled sharding дуже складний в операції.
+7. **Reference tables на кожному шарді** — дублювати маленькі довідники, не робити cross-shard lookup для кожного запиту.
+
+---
+
+#### Міні-шпаргалка
+
+- **Шардінг** — горизонтальний розподіл даних між кількома серверами; єдиний спосіб масштабувати запис
+- **Shard key** визначає на який шард іде запит; поганий вибір → hotspot або постійні cross-shard операції
+- **Range** — рівні діапазони, ризик hotspot; **Hash** — рівномірний розподіл, складний resharding; **Consistent hashing** — легкий resharding; **Directory** — максимальна гнучкість, але lookup є SPF
+- **Cross-shard JOIN** — неможливий в SQL; рішення: денормалізація, application-level JOIN, reference tables, analytics replica
+- **Розподілені транзакції**: **2PC** — атомарність але blocking і повільно; **Saga** — eventual consistency але масштабується; **найкраще** — проєктувати щоб не виникали
+- **Resharding** — дорога операція; consistent hashing або Vitess мінімізують вартість
+- **Глобальний ID** — AUTO_INCREMENT не працює між шардами; Snowflake, ULID або UUID
+- **Scatter-gather** — запит без shard key іде на всі шарди паралельно і merge результатів
+
+</details>
+
+<a id="30"></a>
+
+### 30. Що таке full-text search у MySQL та Elasticsearch, як вони працюють і коли який підхід краще використовувати? Поясніть, як працює full-text search у MySQL, що таке inverted index в Elasticsearch, у чому різниця між пошуком у реляційній БД та окремому пошуковому рушії, які є обмеження MySQL full-text search, і в яких сценаріях достатньо можливостей самої БД, а коли краще використовувати Elasticsearch.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Full-text search — це пошук за змістом тексту, а не точним збігом значення. Замість `WHERE title = 'купити ноутбук'` система шукає документи де зустрічаються слова «купити» і «ноутбук» у будь-якому порядку, з урахуванням морфології, синонімів, релевантності. Це принципово інша задача ніж реляційний пошук.
+
+MySQL має вбудований full-text search — достатній для базових сценаріїв. Elasticsearch — окрема пошукова система побудована на Apache Lucene, оптимізована виключно для текстового пошуку. Вибір між ними залежить від вимог до якості пошуку, обсягу даних і допустимої складності інфраструктури.
+
+---
+
+#### Full-text search у MySQL
+
+MySQL реалізує full-text search через спеціальний **FULLTEXT індекс**, який будує власний inverted index поверх вказаних текстових стовпців. Підтримується для InnoDB (з MySQL 5.6+) і MyISAM.
+
+**Як побудувати і використати:**
+
+```sql
+-- Додати FULLTEXT індекс
+ALTER TABLE articles ADD FULLTEXT INDEX ft_content (title, body);
+
+-- Пошук в природному режимі (за замовчуванням)
+SELECT id, title,
+       MATCH(title, body) AGAINST ('купити ноутбук') AS relevance
+FROM articles
+WHERE MATCH(title, body) AGAINST ('купити ноутбук')
+ORDER BY relevance DESC;
+
+-- Булевий режим — більше контролю над умовами
+SELECT * FROM articles
+WHERE MATCH(title, body) AGAINST ('+ноутбук -б/у' IN BOOLEAN MODE);
+-- + обов'язкове слово, - виключити, * трансількація
+
+-- Query expansion — розширення запиту через схожі терміни
+SELECT * FROM articles
+WHERE MATCH(title, body) AGAINST ('ноутбук' WITH QUERY EXPANSION);
+```
+
+**Режими пошуку:**
+
+*Natural Language Mode* (за замовчуванням) — MySQL обчислює relevance score для кожного рядка на основі TF-IDF (term frequency – inverse document frequency): слово що рідко зустрічається в усій таблиці, але часто в конкретному документі, отримує вищий score. Слова що зустрічаються в >50% рядків автоматично вважаються «стоп-словами» і ігноруються — це часто дивує на маленьких таблицях.
+
+*Boolean Mode* — дозволяє явно задавати умови: `+word` (обов'язкове), `-word` (виключити), `word*` (префікс), `"phrase"` (точна фраза), `(group)`, вагові оператори `> <`. Не обчислює relevance за TF-IDF — всі результати мають однаковий score якщо не задано вагу явно.
+
+*Query Expansion* — двоетапний пошук: спочатку natural language, потім повторний пошук з додаванням найбільш релевантних слів із результатів першого. Розширює охоплення за рахунок точності.
+
+---
+
+#### Обмеження MySQL full-text search
+
+**Мінімальна довжина слова.** За замовчуванням InnoDB індексує слова від 3 символів (`innodb_ft_min_token_size = 3`). Слова коротші 3 символів ігноруються при індексуванні і пошуку. Для пошуку по коротких термінах (ID, коди) потрібно змінювати конфіг і перебудовувати індекс.
+
+**Стоп-слова.** MySQL має вбудований список стоп-слів (the, a, is...) і власне правило «50%»: слово що є в >50% рядків ігнорується. Власний список стоп-слів можна задати через `innodb_ft_server_stopword_table`, але це вимагає рестарту.
+
+**Немає морфологічного аналізу.** MySQL шукає по токенах — розбиває текст на слова по пробілах і пунктуації. Немає stemming (скорочення до кореня: «купити» і «купував» — різні слова), немає lemmatization, немає підтримки мов з агглютинативною морфологією. Для пошуку «ноутбуки» не знайде документ де написано «ноутбук».
+
+**Немає синонімів і нечіткого пошуку.** MySQL не підтримує пошук за синонімами («телефон» ≠ «смартфон»), fuzzy search (допустима відстань Левенштейна), фонетичний пошук.
+
+**Немає підсвічування результатів.** MySQL не повертає фрагменти тексту з підсвіченими збігами (highlights/snippets) — потрібно реалізовувати вручну.
+
+**FULLTEXT індекс на всю таблицю, не на частину.** Не можна зробити partial FULLTEXT index. Фільтрація за іншими стовпцями до повнотекстового пошуку неефективна — MySQL спочатку виконує MATCH, потім фільтрує.
+
+**Тільки рядкові типи.** FULLTEXT підтримується для CHAR, VARCHAR, TEXT. JSON, числа — не підтримуються.
+
+---
+
+#### Inverted index в Elasticsearch
+
+Elasticsearch побудований на Apache Lucene і в основі його — **inverted index** (обернений індекс). Це структура що зберігає відповідність: слово → список документів де воно зустрічається + позиція в документі.
+
+Спрощено inverted index виглядає так:
+
+```
+слово       → [doc_id: позиції]
+"ноутбук"   → [doc:1: [3, 15], doc:5: [7], doc:12: [1, 22]]
+"купити"    → [doc:1: [2], doc:3: [5, 8], doc:5: [6]]
+"б/у"       → [doc:3: [6], doc:8: [2]]
+```
+
+Пошук «купити ноутбук» → знайти перетин списків для обох слів → doc:1 і doc:5; doc:1 має обидва слова поруч (позиції 2 і 3) → вищий score.
+
+**Аналіз тексту (Analysis pipeline).** Перед записом в inverted index Elasticsearch пропускає текст через analyzer — послідовність трансформацій:
+
+1. *Character filters* — видалення HTML тегів, заміна спецсимволів
+2. *Tokenizer* — розбиття на токени (слова). Standard tokenizer — по пробілах і пунктуації; є NGram tokenizer (підрядки) для автодоповнення; whitespace, keyword тощо
+3. *Token filters* — lowercase, stemming (Snowball, language-specific), synonym filter (купити → придбати), stop words, asciifolding (é → e)
+
+Той самий analyzer застосовується при індексуванні і при пошуку — тому «КУПИТИ» і «купити» знаходять одне й те саме.
+
+**Relevance scoring: BM25.** Elasticsearch 5+ використовує BM25 (Best Match 25) замість класичного TF-IDF. BM25 краще враховує довжину документа і насиченість терміном: якщо слово зустрічається 10 разів в короткому тексті і 10 разів в довгому — перший документ релевантніший. Це дає значно якісніший ранжування ніж MySQL TF-IDF.
+
+**Розподіленість.** Elasticsearch — distributed by design. Індекс розбивається на shards (primary + replica), кожен shard — окремий Lucene-індекс. Пошук виконується паралельно по всіх shards і результати мерджаться. Це дозволяє горизонтально масштабувати як індексування, так і пошук.
+
+---
+
+#### Ключові відмінності MySQL FTS vs Elasticsearch
+
+| | MySQL FULLTEXT | Elasticsearch |
+|---|---|---|
+| Морфологія | Немає (токени) | Stemming, lemmatization, аналізатори |
+| Мовна підтримка | Обмежена | 30+ мов з dedicated analyzers |
+| Нечіткий пошук | Немає | fuzzy query, Levenshtein distance |
+| Синоніми | Немає | Synonym token filter |
+| Релевантність | TF-IDF (просте) | BM25 (якісніше) |
+| Highlights | Немає | Вбудований highlighter |
+| Автодоповнення | Немає | Completion suggester, NGram |
+| Фасетний пошук | Складно | Aggregations (вбудовано) |
+| Масштабування | Вертикально | Горизонтально (distributed shards) |
+| Транзакційність | ACID разом з даними | Eventual consistency, немає транзакцій |
+| Складність інфраструктури | Немає (всередині MySQL) | Окремий кластер + синхронізація даних |
+| Актуальність даних | Миттєво (після COMMIT) | Затримка refresh (дефолт 1 сек) |
+
+---
+
+#### Синхронізація даних MySQL → Elasticsearch
+
+Elasticsearch — окрема система, дані в ній — похідні від MySQL. Потрібна синхронізація:
+
+*Dual write в застосунку.* При кожному INSERT/UPDATE/DELETE в MySQL застосунок також пише в Elasticsearch. Просто, але ненадійно: якщо одна з операцій провалиться — дані розійдуться. Потрібна retry-логіка або черга.
+
+*Change Data Capture (CDC) через binlog.* Debezium або аналоги читають MySQL binlog і публікують зміни в Kafka. Окремий consumer читає Kafka і оновлює Elasticsearch. Надійніше: CDC не пропускає зміни навіть при даунтаймі consumer; але додає Kafka як інфраструктурну залежність.
+
+*Periodic re-index.* Cron-job що переіндексує змінені рядки за `updated_at > last_run`. Просто, але є lag (затримка до наступного запуску) і не обробляє видалення коректно.
+
+*Logstash / mlogstash JDBC input.* Logstash може читати з MySQL за SQL-запитом по розкладу і синхронізувати в Elasticsearch. Підходить для некритичних сценаріїв, але теж із затримкою.
+
+---
+
+#### Коли достатньо MySQL FULLTEXT
+
+MySQL full-text search підходить коли:
+
+- Обсяг текстових даних невеликий (десятки тисяч документів)
+- Пошук допоміжний, а не основна функція продукту (наприклад, пошук по внутрішній базі статей)
+- Морфологія не критична — шукають переважно точні слова або префікси
+- Немає потреби в highlights, suggest, facets
+- Додатковий сервіс Elasticsearch ускладнить deployment непропорційно задачі
+- Мова застосунку — англійська або інша де токенізація по пробілах достатня
+
+Типовий сценарій: адмін-панель з пошуком по назві продукту або Email клієнта — MySQL FULLTEXT цілком достатній.
+
+---
+
+#### Коли потрібен Elasticsearch
+
+Elasticsearch виправданий коли:
+
+- Пошук — центральна функція продукту (маркетплейс, новинний портал, e-commerce каталог)
+- Потрібна морфологія рідної мови (стемінг для української, польської, турецької)
+- Потрібен fuzzy search — «ноутбу» знаходить «ноутбук»; друкарські помилки
+- Потрібне автодоповнення (suggest as you type) — completion suggester або NGram index
+- Потрібен фасетний пошук (фільтри по категорії, бренду, ціновому діапазону з кількістю результатів)
+- Обсяг даних великий і зростає — горизонтальне масштабування шардів
+- Потрібне підсвічування — показати фрагмент тексту де знайдено термін
+- Різнорідні типи документів з різною структурою — dynamic mapping
+
+---
+
+#### Практичні рекомендації
+
+1. **Почати з MySQL FULLTEXT** — якщо пошук не є ключовою функцією і команда ще не впевнена у вимогах; додати Elasticsearch завжди можна пізніше
+2. **Boolean mode для структурованих запитів** — якщо потрібен контроль над умовами пошуку (`+обов'язкове -виключити`)
+3. **Перевіряти 50% правило** — якщо таблиця маленька або всі документи дуже схожі, MySQL може ігнорувати більшість слів; тестувати на реальних даних
+4. **CDC + Kafka для надійної синхронізації** — dual write в коді нестабільний; для production Debezium → Kafka → ES consumer
+5. **Окремий аналізатор для кожної мови** — в ES не використовувати `standard` для не-англійської; для української немає офіційного аналізатора, але є `ukrainian` stemmer через `hunspell`
+6. **Refresh interval** — в Elasticsearch дефолтний refresh кожну секунду; для bulk indexing можна тимчасово збільшити до 30s для швидшого завантаження
+
+---
+
+#### Міні-шпаргалка
+
+- **MySQL FULLTEXT**: inverted index, три режими — Natural Language (TF-IDF score), Boolean (+/-/*), Query Expansion
+- **Обмеження MySQL**: мінімум 3 символи, немає морфології/fuzzy/синонімів, 50% rule ігнорує часті слова, немає highlights
+- **Elasticsearch inverted index**: term → [doc_id: positions]; analyzer pipeline: char filter → tokenizer → token filters
+- **BM25** в ES — якісніший ранжування ніж TF-IDF: враховує довжину документа
+- **Синхронізація**: dual write (просто, ненадійно) або CDC через binlog + Kafka (надійно)
+- **MySQL FULLTEXT достатньо**: невеликий обсяг, допоміжний пошук, токенізація по пробілах влаштовує
+- **Elasticsearch потрібен**: морфологія, fuzzy, suggest, facets, великий обсяг, пошук як core-feature
+
+</details>
+
+<a id="31"></a>
+
+### 31. Які структури даних підтримує Redis і для яких задач кожна з них використовується? Поясніть string, list, set, sorted set, hash, bitmap, stream на практичних прикладах.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Redis — in-memory сховище даних, де кожен ключ пов'язаний з конкретною структурою даних. На відміну від Memcached де все є рядком, Redis дозволяє виконувати операції прямо над структурою на стороні сервера — без читання, зміни і запису назад у застосунку. Це ключова перевага: атомарний `INCR` замість read-modify-write, `ZADD` замість сортування в коді, `SADD`/`SINTER` замість set-логіки в PHP/Python.
+
+Всі операції Redis є атомарними (Redis однопотоковий за обробкою команд), більшість структур підтримують `EXPIRE` для автоматичного видалення, і всі команди мають O-складність що дозволяє передбачати поведінку під навантаженням.
+
+---
+
+#### String
+
+Найпростіша і найуніверсальніша структура. Ключ → бінарне значення до 512 MB. Попри назву, може зберігати рядки, числа, серіалізований JSON, бінарні дані.
+
+```
+SET session:user:42 '{"id":42,"role":"admin"}' EX 3600
+GET session:user:42
+
+SET page:home:cache '<html>...</html>' EX 300
+
+-- Атомарні лічильники
+INCR  api:requests:2024-01-15        -- +1, повертає нове значення
+INCRBY stats:downloads:file_123 5    -- +5
+DECR  rate_limit:user:42             -- -1
+
+-- Атомарний SET якщо не існує (distributed lock)
+SET lock:order:789 "worker-1" NX EX 30
+-- NX = only if Not eXists; EX = TTL в секундах
+```
+
+**Типові use cases:**
+- **Кешування** — HTML-сторінки, результати SQL-запитів, відповіді API; TTL контролює свіжість
+- **Сесії** — `session:{token}` → JSON з даними користувача; швидше ніж MySQL, TTL для auto-expiry
+- **Лічильники** — кількість переглядів, завантажень, API-запитів; `INCR` атомарний, немає race condition
+- **Distributed lock** — `SET key value NX EX ttl`; якщо повернуло `OK` — lock отриманий, якщо `nil` — зайнятий
+- **Rate limiting** — `INCR requests:ip:1.2.3.4` + перевірка порогу + `EXPIRE`
+
+---
+
+#### List
+
+Двобічна черга (linked list) рядків. Елементи впорядковані за часом вставки. Підтримує вставку/видалення з обох кінців за O(1); доступ по індексу — O(n).
+
+```
+-- Черга (queue): RPUSH + BLPOP
+RPUSH  jobs:email  '{"to":"a@b.com","subject":"Hi"}'
+RPUSH  jobs:email  '{"to":"c@d.com","subject":"Bye"}'
+BLPOP  jobs:email  0    -- блокуючий pop, чекає якщо черга порожня
+
+-- Стек (stack): RPUSH + RPOP
+
+-- Обмежена за розміром черга (лог останніх N подій)
+LPUSH  activity:user:42  '{"action":"login","ts":1704067200}'
+LTRIM  activity:user:42  0 99   -- зберегти тільки 100 останніх
+
+-- Пагінація по списку
+LRANGE notifications:user:42  0 19   -- перші 20
+LRANGE notifications:user:42  20 39  -- наступні 20
+```
+
+**Типові use cases:**
+- **Message queue / task queue** — `RPUSH` щоб додати задачу, `BLPOP` щоб worker забрав; `BLPOP` блокується якщо черга порожня — не потрібен polling
+- **Activity feed / останні події** — `LPUSH` нова подія + `LTRIM` для обмеження розміру → завжди останні N записів
+- **Undo history** — стек операцій для скасування; `RPUSH` додати, `RPOP` скасувати останнє
+- **Простий pub/sub без персистентності** — LPUSH + BLPOP між процесами
+
+---
+
+#### Set
+
+Невпорядкована колекція унікальних рядків. `SADD` ігнорує дублікати. Підтримує теоретико-множинні операції між кількома множинами.
+
+```
+-- Відстеження унікальних відвідувачів
+SADD  visitors:page:home:2024-01-15  "user:42"
+SADD  visitors:page:home:2024-01-15  "user:99"
+SADD  visitors:page:home:2024-01-15  "user:42"  -- ігнорується
+SCARD visitors:page:home:2024-01-15              -- → 2
+
+-- Теги статті
+SADD  article:789:tags  "mysql" "database" "backend"
+SMEMBERS article:789:tags
+
+-- Спільні підписники (перетин множин)
+SINTER followers:user:1  followers:user:2   -- спільні фоловери
+
+-- Товари в категоріях (об'єднання)
+SUNION category:phones  category:tablets    -- всі пристрої
+
+-- Різниця: підписники user:1 яких немає у user:2
+SDIFF  followers:user:1  followers:user:2
+```
+
+**Типові use cases:**
+- **Унікальні відвідувачі** — DAU/MAU: `SADD visitors:2024-01-15 user_id`; `SCARD` для підрахунку; але пам'ять пропорційна кількості унікальних значень → для великих масивів краще HyperLogLog
+- **Теги і категорії** — множинні теги на статтю; `SINTER` для "знайди статті з тегами X і Y"
+- **Зв'язки в соціальній мережі** — "спільні друзі": `SINTER friends:user1 friends:user2`
+- **Перевірка членства** — `SISMEMBER blocked_ips "1.2.3.4"` за O(1)
+- **Унікальність в черзі** — `SADD processed_jobs job_id` → якщо повернуло 0, вже оброблено
+
+---
+
+#### Sorted Set (ZSet)
+
+Множина унікальних рядків де кожен елемент має числовий score (float). Елементи автоматично сортуються за score. При однаковому score — лексикографічно. Складність основних операцій O(log N).
+
+```
+-- Лідерборд (рейтинг гравців)
+ZADD  leaderboard  1500  "user:42"
+ZADD  leaderboard  2300  "user:99"
+ZADD  leaderboard  1800  "user:7"
+
+ZREVRANGE  leaderboard  0  9  WITHSCORES  -- топ-10, від найвищого score
+ZREVRANK   leaderboard  "user:42"         -- позиція user:42 (з кінця → з початку)
+ZINCRBY    leaderboard  100  "user:42"    -- +100 очок атомарно
+
+-- Черга з пріоритетом (score = пріоритет або timestamp)
+ZADD  priority_queue  1  "low_task"
+ZADD  priority_queue  10 "high_task"
+ZPOPMIN  priority_queue           -- взяти задачу з найнижчим score
+
+-- Delayed job queue (score = unix timestamp виконання)
+ZADD  scheduled_jobs  1704153600  "send_email:job_123"
+-- Worker перевіряє: ZRANGEBYSCORE scheduled_jobs 0 <now> LIMIT 0 10
+```
+
+**Типові use cases:**
+- **Лідерборди і рейтинги** — `ZADD` для оновлення score, `ZREVRANGE` для топ-N, `ZREVRANK` для позиції конкретного гравця; все атомарно
+- **Rate limiting зі sliding window** — score = timestamp; `ZREMRANGEBYSCORE` видаляє старі записи, `ZCARD` рахує поточні
+- **Черга з пріоритетом** — score = пріоритет; `ZPOPMIN` завжди бере найважливіше
+- **Delayed/scheduled tasks** — score = unix timestamp коли виконати; worker забирає `ZRANGEBYSCORE 0 now`
+- **Геопошук (GEO)** — Redis GEO команди (`GEOADD`, `GEODIST`, `GEORADIUS`) всередині реалізовані через Sorted Set де score = геохеш
+
+---
+
+#### Hash
+
+Словник (map) field → value всередині одного Redis-ключа. Дозволяє зберігати об'єкт як набір іменованих полів, оновлювати окремі поля без перезапису всього об'єкта.
+
+```
+-- Профіль користувача
+HSET  user:42  name "Іван" email "ivan@example.com" age 30 role "admin"
+HGET  user:42  email                   -- одне поле
+HMGET user:42  name email role         -- кілька полів
+HGETALL user:42                        -- всі поля
+
+-- Оновити тільки одне поле без читання решти
+HSET  user:42  last_login "2024-01-15"
+
+-- Атомарний лічильник в hash
+HINCRBY  user:42  login_count  1
+HINCRBY  product:789  views    1
+
+-- Кешування часткових даних
+HSET  product:789  title "Ноутбук" price 25000 stock 5
+HGET  product:789  price              -- тільки ціна без зайвих полів
+```
+
+**Типові use cases:**
+- **Об'єкти з полями** — профіль користувача, продукт, налаштування; зберігати як Hash, а не серіалізований JSON у String — можна оновити одне поле без десеріалізації/ресеріалізації всього об'єкта
+- **Часткове кешування** — кешувати тільки часто читані поля об'єкта, не весь запис з БД
+- **Лічильники згруповані по entity** — `HINCRBY stats:article:789 views 1` та `comments 1` в одному місці
+- **Сесії з полями** — зберігати дані сесії як hash, оновлювати `last_active` без перезапису токена
+
+Hash vs String з JSON: Hash — якщо потрібен доступ до окремих полів. String+JSON — якщо завжди читаєте/пишете весь об'єкт цілком.
+
+---
+
+#### Bitmap
+
+Не окрема структура — String де Redis дозволяє адресувати окремі біти. Ключ зберігає рядок байтів, кожен біт адресується позицією (offset). Максимум 2³² біт = 512 MB = 4 млрд бітів на ключ.
+
+```
+-- Відстеження активності користувача по днях
+-- offset = day_of_year; 1 = активний, 0 = неактивний
+SETBIT  activity:user:42:2024  14  1   -- активний 14-й день
+SETBIT  activity:user:42:2024  15  1   -- активний 15-й день
+GETBIT  activity:user:42:2024  14      -- → 1
+BITCOUNT activity:user:42:2024         -- скільки днів активний за рік
+
+-- Чи зробив користувач певну дію (feature flag, onboarding)
+SETBIT  onboarding:step:1  42  1       -- user 42 виконав крок 1
+GETBIT  onboarding:step:1  42          -- перевірити
+
+-- DAU через BITOP: скільки унікальних активних за тиждень
+SETBIT  dau:2024-01-15  42  1
+SETBIT  dau:2024-01-15  99  1
+SETBIT  dau:2024-01-16  42  1
+BITOP OR  weekly_active  dau:2024-01-15  dau:2024-01-16
+BITCOUNT  weekly_active               -- унікальних активних за 2 дні
+```
+
+**Типові use cases:**
+- **Компактне відстеження boolean стану для мільйонів об'єктів** — 1 млрд користувачів × 1 біт = 125 MB. Чи голосував user з ID X? `GETBIT votes:post:789 X`
+- **Активність по датах** — heat map активності: 365 днів × 1 біт = 46 байт на користувача
+- **Масові feature flags** — чи увімкнено фічу для user_id X; `SETBIT feature:dark_mode user_id 1`
+- **DAU/MAU через BITOP** — `BITOP OR` об'єднує bitmap-и активних за кілька днів, `BITCOUNT` рахує
+
+---
+
+#### Stream
+
+Append-only лог подій (з Redis 5.0). Кожен запис — uniq ID (timestamp-sequence) + набір field-value. Підтримує consumer groups (як Kafka): кілька consumer-груп читають незалежно, кожна зберігає свою позицію; ack-підтвердження обробки.
+
+```
+-- Записати подію
+XADD  events:orders  *  order_id 789  user_id 42  amount 1500  status "created"
+-- * = auto-generated ID (timestamp-seq), напр. 1704067200000-0
+
+-- Читати нові події (як tail -f)
+XREAD COUNT 10 BLOCK 5000 STREAMS events:orders $
+-- $ = тільки нові після поточного моменту; BLOCK 5000 = чекати 5 сек
+
+-- Consumer group: кілька workers обробляють незалежно
+XGROUP CREATE  events:orders  billing-service  $   -- створити групу
+XREADGROUP GROUP billing-service worker-1  COUNT 5  STREAMS events:orders >
+-- > = нові невідпрацьовані повідомлення для цієї групи
+
+XACK  events:orders  billing-service  1704067200000-0  -- підтвердити обробку
+
+-- Читати весь лог або діапазон
+XRANGE  events:orders  -  +               -- всі записи
+XRANGE  events:orders  1704067200000  +   -- від timestamp
+XLEN    events:orders                     -- кількість записів
+```
+
+**Типові use cases:**
+- **Event log / audit trail** — незмінний хронологічний лог дій; на відміну від List не видаляє при читанні
+- **Легкий message broker** — замість Kafka для простих сценаріїв: consumer groups, ack, replay; без складності Kafka-кластера
+- **Time series events** — метрики, IoT-дані, user activity з автоматичним ID-timestamp
+- **Ordered event sourcing** — події для відновлення стану; `XRANGE` дозволяє replay з будь-якої позиції
+
+Stream vs List: List — проста черга де повідомлення зникає після pop. Stream — persistent лог де кілька consumer-груп читають незалежно і можна робити replay.
+
+---
+
+#### Порівняльна таблиця структур
+
+| Структура | Внутрішнє представлення | Складність ключових операцій | Типовий use case |
+|---|---|---|---|
+| String | SDS (Simple Dynamic String) | O(1) GET/SET, O(1) INCR | Кеш, сесія, лічильник, lock |
+| List | Linked list / listpack | O(1) push/pop з кінців, O(n) by index | Черга, стек, activity feed |
+| Set | Hash table / listpack | O(1) add/remove/member, O(n) SMEMBERS | Унікальні елементи, теги, set ops |
+| Sorted Set | Skip list + hash table | O(log N) add/remove, O(log N+M) range | Лідерборд, rate limit, scheduled tasks |
+| Hash | Hash table / listpack | O(1) HGET/HSET, O(n) HGETALL | Об'єкти з полями, часткове кешування |
+| Bitmap | String з бітовою адресацією | O(1) SETBIT/GETBIT, O(n) BITCOUNT | boolean масиви, активність по датах |
+| Stream | Radix tree | O(1) XADD, O(n) XRANGE | Event log, message broker, time series |
+
+---
+
+#### Міні-шпаргалка
+
+- **String**: кеш, сесія, `INCR` лічильник, `SET NX EX` distributed lock
+- **List**: черга (`RPUSH`+`BLPOP`), стек, `LPUSH`+`LTRIM` для останніх N подій
+- **Set**: унікальні елементи, O(1) membership check, `SINTER`/`SUNION`/`SDIFF` для set operations
+- **Sorted Set**: лідерборд (`ZADD`+`ZREVRANGE`), priority queue (`ZPOPMIN`), delayed jobs (score=timestamp)
+- **Hash**: об'єкт з полями, оновлення окремого поля без десеріалізації, `HINCRBY` для лічильників
+- **Bitmap**: 1 біт на user/object → дуже компактно; `BITCOUNT` / `BITOP OR` для DAU
+- **Stream**: persistent append-only лог, consumer groups з ack, replay — легка альтернатива Kafka
+
+</details>
+
+<a id="32"></a>
+
+### 32. У яких випадках Redis варто використовувати не лише як кеш, а як окремий інструмент для прикладних задач? Наприклад: rate limiting, distributed locks, counters, queues, pub/sub, ephemeral data.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Більшість команд сприймають Redis виключно як кеш — «поставили TTL, зберегли результат запиту». Але Redis — це in-memory data structure server, і його справжня цінність у тому, що він виконує складну логіку атомарно, на стороні сервера, за мікросекунди. Завдяки цьому Redis вирішує цілий клас прикладних задач, для яких MySQL надто повільний або взагалі не підходить: обмеження частоти запитів, координація між процесами, real-time лічильники, легкий message broker. Розуміння цих сценаріїв відрізняє розробника який «використовує Redis» від того хто «знає Redis».
+
+---
+
+#### Rate Limiting
+
+Задача: обмежити кількість запитів від одного IP або користувача за проміжок часу. У MySQL це вимагає транзакції, UPDATE лічильника і перевірки — при тисячах RPS це вузьке місце. Redis вирішує атомарно.
+
+**Fixed window (фіксоване вікно):**
+
+```
+INCR  rate:ip:1.2.3.4:2024011515   -- ключ включає годину/хвилину
+EXPIRE rate:ip:1.2.3.4:2024011515  60
+
+-- Якщо повернуте значення > ліміт → відмовити
+```
+
+Просто, але має edge case: на межі вікон можна зробити подвійну кількість запитів (наприкінці першої хвилини + на початку другої).
+
+**Sliding window через Sorted Set:**
+
+```
+-- score = timestamp мікросекунд, member = унікальний ID запиту
+ZADD   rate:user:42  <now_ms>  <request_id>
+ZREMRANGEBYSCORE  rate:user:42  0  <now_ms - window_ms>   -- видалити старі
+ZCARD  rate:user:42                                        -- кількість запитів у вікні
+EXPIRE rate:user:42  <window_seconds>
+```
+
+Точне sliding window без edge case, але більше пам'яті (зберігає всі запити у вікні). Для більшості API обмеження в 100 req/min — розумно.
+
+**Token bucket через Lua-скрипт** — найточніший алгоритм, виконується атомарно через `EVAL`:
+Redis дозволяє виконати Lua-скрипт атомарно — кілька команд як одна операція без race condition між ними. Скрипт читає поточну кількість токенів, додає накопичені за час що минув, обрізає до максимуму, зменшує на 1 якщо дозволено і зберігає назад — все в одній атомарній операції.
+
+---
+
+#### Distributed Lock
+
+Задача: гарантувати що тільки один процес (або один worker серед N) виконує певну дію в конкретний момент. Класичний приклад: обробка платежу, відправка email, cron-job що не має запускатись двічі паралельно.
+
+**Базовий lock через SET NX EX:**
+
+```
+SET lock:payment:order_789  "worker-1-uuid"  NX  EX 30
+-- NX = тільки якщо ключ не існує
+-- EX 30 = автоматично видалити через 30 секунд (захист від зависання)
+```
+
+Якщо команда повернула `OK` — lock отримано. Якщо `nil` — хтось інший вже тримає lock.
+
+При звільненні важливо видаляти **тільки свій** lock — щоб не видалити lock іншого процесу якщо TTL вийшов і lock перейшов:
+
+```lua
+-- Атомарно перевірити value і видалити (Lua-скрипт)
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+```
+
+Value lock = унікальний UUID процесу. Перед видаленням перевіряємо що value наше. Через Lua-скрипт GET + DEL атомарні.
+
+**Redlock** — алгоритм для distributed lock на кількох незалежних Redis-нодах (зазвичай 5). Процес намагається отримати lock на більшості нод (≥3 з 5) за час менший ніж TTL. Якщо вдалось — lock valid. Захищає від сценарію де одна Redis-нода падає між отриманням і звільненням lock. Для більшості застосунків з одним Redis-сервером достатньо базового `SET NX EX`.
+
+**Важливі нюанси:**
+- TTL має бути більшим ніж час виконання операції + запас на затримки мережі
+- Якщо process завис і TTL вийшов — lock автоматично звільниться, інший process захопить. Перший process після відновлення може виконати дію двічі → потрібна idempotency або перевірка після lock
+- Distributed lock не замінює транзакційну консистентність БД — він координує доступ до спільного ресурсу між процесами
+
+---
+
+#### Counters і статистика
+
+`INCR` і `INCRBY` — атомарні операції без жодного race condition. При тисячах одночасних запитів до одного лічильника MySQL UPDATE потребує row lock; Redis виконує атомарно за мікросекунди.
+
+```
+-- Перегляди сторінки (real-time)
+INCR  views:article:789
+
+-- Завантаження файлу
+INCRBY  downloads:file_123  1
+
+-- API usage per user per day
+INCR  api:user:42:2024-01-15
+EXPIRE api:user:42:2024-01-15  86400
+
+-- Статистика по хвилинах (згладжений real-time графік)
+INCR  metric:requests:2024011514:35   -- year+month+day+hour:minute
+```
+
+**HyperLogLog** — спеціалізована структура для підрахунку унікальних значень з апроксимацією (похибка ~0.81%) при фіксованій пам'яті ~12 KB незалежно від кількості унікальних елементів:
+
+```
+PFADD  hll:unique_visitors:2024-01-15  "user:42"
+PFADD  hll:unique_visitors:2024-01-15  "user:99"
+PFCOUNT hll:unique_visitors:2024-01-15  -- ~2
+
+PFMERGE  hll:weekly  hll:uv:mon  hll:uv:tue  hll:uv:wed  -- об'єднати
+```
+
+Для точного підрахунку DAU/MAU у 100 млн+ користувачів Set займе сотні MB, HyperLogLog — 12 KB. Якщо допустима невелика похибка — HyperLogLog виграє.
+
+---
+
+#### Queues і background jobs
+
+Задача: декаплювати важку обробку від HTTP-запиту. Користувач завантажив файл → відповідь "прийнято" → background worker обробляє асинхронно.
+
+**Проста черга через List:**
+
+```
+-- Producer (в HTTP-контролері)
+RPUSH  queue:image:resize  '{"file":"upload_123.jpg","sizes":[800,400]}'
+
+-- Consumer (background worker)
+BLPOP  queue:image:resize  0     -- чекає нескінченно якщо черга порожня
+-- повертає елемент і видаляє його атомарно
+```
+
+`BLPOP` блокується якщо черга порожня і негайно повертає елемент коли він з'являється — без polling і без CPU.
+
+**Надійна черга (reliable queue) через BRPOPLPUSH / LMOVE:**
+
+```
+-- Атомарно перемістити з основної черги в "processing" чергу
+LMOVE  queue:jobs  queue:jobs:processing  LEFT  RIGHT
+
+-- Worker обробляє... якщо впав — задача залишається в processing
+-- Monitor process повертає старі задачі назад:
+-- якщо задача в processing більше 5 хв → LMOVE назад у queue:jobs
+```
+
+Якщо worker впав під час обробки — задача залишається в `processing` і не загублена. Окремий process-monitor перевіряє timeout і повертає задачі назад.
+
+**Черга з пріоритетом через Sorted Set:**
+
+```
+ZADD  queue:priority  1  "low:task_1"
+ZADD  queue:priority  10 "high:task_2"
+ZADD  queue:priority  5  "medium:task_3"
+
+ZPOPMAX  queue:priority   -- взяти найпріоритетніше
+```
+
+---
+
+#### Pub/Sub
+
+Задача: повідомити кілька незалежних компонентів про подію без прямого зв'язку між ними.
+
+```
+-- Subscriber (кілька незалежних процесів підписуються)
+SUBSCRIBE  channel:order:created
+
+-- Publisher (коли замовлення створено)
+PUBLISH  channel:order:created  '{"order_id":789,"user_id":42}'
+```
+
+Redis pub/sub — fire and forget: якщо subscriber не підключений в момент публікації — повідомлення втрачено. Немає персистентності, немає ack, немає replay.
+
+**Pattern subscribe** — підписка на шаблон каналів:
+
+```
+PSUBSCRIBE  channel:order:*    -- всі події замовлень
+PSUBSCRIBE  notifications:user:42:*
+```
+
+**Keyspace notifications** — Redis сам публікує події про зміни ключів (SET, DEL, EXPIRE):
+
+```
+-- В redis.conf: notify-keyspace-events "Ex"
+-- E = keyspace events, x = expired events
+
+SUBSCRIBE  __keyevent@0__:expired   -- отримати подію коли будь-який ключ expires
+```
+
+Корисно для: тригер коли закінчився TTL сесії, тригер коли distributed lock звільнився.
+
+**Pub/Sub vs Stream:** Pub/Sub для ephemeral real-time повідомлень де втрата прийнятна (chat, live notifications, dashboard updates). Stream — якщо потрібна персистентність, ack, replay, consumer groups.
+
+---
+
+#### Ephemeral data і TTL-based логіка
+
+Redis з TTL — ідеальний інструмент для даних що живуть обмежений час і мають зникати автоматично.
+
+**OTP і verification tokens:**
+
+```
+SET  otp:phone:+380991234567  "483920"  EX 300   -- дійсний 5 хвилин
+-- Після успішної верифікації або після EX — видаляється автоматично
+```
+
+**Email confirmation tokens:**
+
+```
+SET  confirm:email:<uuid_token>  42  EX 86400   -- user_id, дійсний 24 год
+-- Користувач переходить по посиланню → GET → отримуємо user_id → активуємо
+```
+
+**Тимчасові флаги стану:**
+
+```
+SET  maintenance:mode  1  EX 3600           -- режим обслуговування на 1 год
+SET  feature:ab_test:user:42  "variant_b"  EX 604800  -- A/B тест на тиждень
+```
+
+**Debounce / cooldown:**
+
+```
+-- Чи відправляли email цьому user за останні 10 хвилин?
+SET  email:cooldown:user:42  1  NX  EX 600
+-- NX = не перезаписувати якщо вже є
+-- Якщо nil → вже відправляли, пропустити
+```
+
+**Idempotency keys:**
+
+```
+SET  idempotency:<request_uuid>  '{"status":"processed","order_id":789}'  NX  EX 86400
+-- Якщо ключ вже є → повернути збережену відповідь без повторної обробки
+-- Захист від duplicate requests (retry після таймауту)
+```
+
+---
+
+#### Online presence і real-time стан
+
+```
+-- Позначити користувача як онлайн
+SET  online:user:42  1  EX 30   -- EX 30 = вважати офлайн якщо не оновлювалось 30 сек
+-- Клієнт надсилає heartbeat кожні 15 сек: SET ... EX 30
+
+-- Хто онлайн в кімнаті чату (Set + TTL через окремий ключ)
+SADD  room:123:online  "user:42"
+-- При disconnect або heartbeat timeout: SREM room:123:online "user:42"
+
+-- Typing indicator (хто зараз друкує)
+SET  typing:room:123:user:42  1  EX 5   -- зникає через 5 сек якщо не оновлено
+```
+
+---
+
+#### Геолокація
+
+Redis GEO команди зберігають координати в Sorted Set (score = геохеш) і дозволяють:
+
+```
+GEOADD  drivers  30.5241  50.4501  "driver:1"   -- longitude, latitude, member
+GEOADD  drivers  30.5300  50.4450  "driver:2"
+
+-- Знайти водіїв в радіусі 5 км від точки
+GEOSEARCH  drivers  FROMLONLAT  30.5200  50.4480  BYRADIUS  5  km  ASC  COUNT  10
+
+-- Відстань між двома точками
+GEODIST  drivers  "driver:1"  "driver:2"  km
+```
+
+Корисно для: nearest driver (Uber-подібно), nearby stores, delivery radius check — без PostGIS і складних geo-запитів.
+
+---
+
+#### Коли Redis не підходить
+
+- **Складні запити і JOIN** — Redis не замінює реляційну БД; структури даних прості, немає query language
+- **Великі об'єкти** — Redis in-memory; зберігання великих бінарних файлів (images, documents) неефективно і дорого
+- **Критичні дані без персистентності** — якщо Redis без RDB/AOF персистентності падає → дані втрачено; для фінансових даних не підходить як основне сховище
+- **Складні транзакції** — Redis MULTI/EXEC є, але без isolation і rollback; не замінює ACID транзакції MySQL
+
+---
+
+#### Міні-шпаргалка
+
+- **Rate limiting**: `INCR` + `EXPIRE` (fixed window) або `ZADD`+`ZREMRANGEBYSCORE`+`ZCARD` (sliding window)
+- **Distributed lock**: `SET key uuid NX EX ttl` → якщо `OK` — lock отримано; звільнення через Lua (GET + DEL атомарно)
+- **Counters**: `INCR`/`INCRBY` атомарний, без race condition; `PFADD`/`PFCOUNT` для унікальних з апроксимацією (HyperLogLog)
+- **Queue**: `RPUSH` + `BLPOP` (проста); `LMOVE` до processing queue (надійна); `ZADD`+`ZPOPMAX` (з пріоритетом)
+- **Pub/Sub**: fire-and-forget; немає персистентності; для real-time ephemeral повідомлень; Stream якщо потрібен ack/replay
+- **Ephemeral data**: OTP (`SET EX`), cooldown (`SET NX EX`), idempotency keys, confirmation tokens
+- **TTL як логіка**: `EXPIRE` автоматично видаляє → не потрібен cleanup cron; keyspace notifications для тригерів на expire
+
+</details>
+
+<a id="33"></a>
+
+### 33. Що таке RabbitMQ і для яких задач у бекенд-системі він використовується? Поясніть черги, асинхронну обробку, retry, decoupling між сервісами та типові кейси.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+RabbitMQ — це message broker, реалізація протоколу AMQP (Advanced Message Queuing Protocol). Його роль: отримати повідомлення від producer, зберегти його і доставити одному або кільком consumer-ам — надійно, навіть якщо consumer тимчасово недоступний.
+
+Головна цінність RabbitMQ — decoupling і асинхронність. Producer не знає нічого про consumer: скільки їх, де вони, чи вони зараз онлайн. Producer надсилає повідомлення в broker і одразу продовжує роботу. Consumer забирає повідомлення у свій темп і обробляє незалежно. Це фундаментально відрізняє від синхронного HTTP-виклику де producer чекає відповіді і залежить від доступності consumer.
+
+---
+
+#### Ключові концепції AMQP / RabbitMQ
+
+**Producer** — застосунок або сервіс, що надсилає повідомлення в RabbitMQ.
+
+**Exchange** — точка входу для повідомлень. Producer публікує повідомлення не прямо в чергу, а в exchange. Exchange вирішує куди направити повідомлення на основі типу і routing key. Це ключова відмінність від простих черг: routing логіка централізована в broker, а не в коді producer.
+
+**Queue** — буфер де зберігаються повідомлення до моменту споживання. Черга персистентна якщо оголошена з `durable=true` — виживає після рестарту broker.
+
+**Binding** — зв'язок між exchange і queue з опціональним routing key або pattern. Визначає які повідомлення з exchange потраплять у цю чергу.
+
+**Consumer** — застосунок що підписується на чергу і обробляє повідомлення.
+
+**Message acknowledgement (ack)** — consumer підтверджує обробку повідомлення після успішного завершення. Якщо consumer впав без ack — RabbitMQ повертає повідомлення в чергу і доставляє іншому consumer. Це гарантія at-least-once delivery.
+
+---
+
+#### Типи Exchange
+
+**Direct exchange** — повідомлення доставляється в чергу де binding key точно збігається з routing key повідомлення:
+
+```
+Exchange: orders
+Binding: queue "orders.new"       ← routing key "new"
+Binding: queue "orders.cancelled" ← routing key "cancelled"
+
+Producer надсилає з routing_key="new" → потрапляє в orders.new
+Producer надсилає з routing_key="cancelled" → потрапляє в orders.cancelled
+```
+
+Використовується коли потрібно направити різні типи подій у різні черги.
+
+**Fanout exchange** — ігнорує routing key, доставляє копію повідомлення у всі прив'язані черги одночасно. Класичний broadcast:
+
+```
+Exchange: notifications (fanout)
+→ queue: notifications.email
+→ queue: notifications.sms
+→ queue: notifications.push
+
+Одне повідомлення "order_created" → три черги → три незалежних обробники
+```
+
+Ідеально для event-driven: подія публікується одного разу, кілька сервісів реагують незалежно.
+
+**Topic exchange** — routing key може містити wildcard-шаблони: `*` — одне слово, `#` — нуль або більше слів:
+
+```
+Binding: queue "logs.critical" ← pattern "*.critical"
+Binding: queue "logs.payment"  ← pattern "payment.#"
+Binding: queue "logs.all"      ← pattern "#"
+
+routing_key = "payment.critical" → потрапляє в усі три черги
+routing_key = "auth.info"        → тільки в logs.all
+```
+
+Гнучкий routing для event-driven систем де типи подій мають ієрархічну структуру.
+
+**Headers exchange** — routing за заголовками повідомлення замість routing key. Рідко використовується на практиці.
+
+---
+
+#### Асинхронна обробка: основний use case
+
+Найпростіший і найважливіший сценарій: важка або нетермінова операція виноситься з HTTP-запиту.
+
+Без черги: HTTP-запит чекає поки відправляється email / генерується PDF / обробляється зображення → timeout, повільна відповідь, погана UX.
+
+З RabbitMQ:
+1. HTTP-контролер отримує запит
+2. Публікує повідомлення в чергу (`queue: email.send`)
+3. Повертає відповідь клієнту за ~5ms
+4. Background worker (окремий процес/сервіс) забирає повідомлення і відправляє email
+
+Worker може запускатись на окремому сервері, масштабуватись незалежно від API, обробляти у свій темп. Якщо email-сервіс тимчасово недоступний — повідомлення очікує в черзі, не втрачається.
+
+**Типові операції для виносу в чергу:**
+- Відправка email, SMS, push-notifications
+- Генерація PDF звітів, рахунків-фактур
+- Обробка зображень (resize, watermark, конвертація)
+- Синхронізація даних із зовнішніми системами (CRM, ERP, склад)
+- Індексація в Elasticsearch після змін у MySQL
+- Відправка webhooks до зовнішніх клієнтів
+
+---
+
+#### Retry і Dead Letter Queue (DLQ)
+
+Обробка помилок — одна з головних причин обирати RabbitMQ замість простої Redis-черги. Коли consumer кидає виняток або повертає nack — що відбувається з повідомленням?
+
+**Базовий retry через nack + requeue:**
+
+```
+Consumer обробляє повідомлення → виникла тимчасова помилка (DB timeout)
+→ basic_nack(requeue=true) → повідомлення повертається в початок черги
+→ негайно доставляється знову → infinite retry loop якщо помилка постійна
+```
+
+Це небезпечно: повідомлення може нескінченно циклитись і блокувати чергу. Потрібна затримка між retry і ліміт спроб.
+
+**Dead Letter Exchange (DLE) + TTL для retry із затримкою:**
+
+Схема: основна черга → при reject → dead letter exchange → черга затримки (TTL) → після TTL → повернутись в основну чергу.
+
+```
+1. Оголосити "retry queue" з TTL і dead-letter-exchange = основний exchange:
+   x-message-ttl: 60000       (затримка 60 сек)
+   x-dead-letter-exchange: main_exchange
+
+2. Основна черга оголошується з dead-letter-exchange = retry_exchange
+
+3. Схема retry:
+   main_queue → consumer fail → nack(requeue=false)
+   → dead_letter_exchange → retry_queue
+   → після TTL 60 сек → back to main_queue
+   → consumer retry
+```
+
+**Dead Letter Queue (DLQ)** — фінальна черга куди потрапляють повідомлення після вичерпання всіх retry. Consumer з DLQ логує помилку, надсилає alert, зберігає в БД для ручного розгляду. DLQ гарантує що жодне повідомлення не втрачається назавжди.
+
+**x-death header** — RabbitMQ автоматично додає заголовок з лічильником смертей і причиною. Consumer може читати цей заголовок і вирішувати: ще раз спробувати або відправити в DLQ:
+
+```
+Кількість спроб = довжина x-death array
+Якщо >= 3 → basic_nack(requeue=false) → потрапляє в DLQ
+```
+
+---
+
+#### Decoupling між сервісами
+
+У монолітній архітектурі компоненти викликають один одного напряму. При переході до мікросервісів або модульного моноліту пряма залежність створює проблеми: якщо один сервіс недоступний — ланцюжок рветься.
+
+**Без брокера:**
+```
+OrderService → EmailService (HTTP) → якщо email-сервіс down → замовлення не створюється
+```
+
+**З RabbitMQ:**
+```
+OrderService → публікує "order.created" в exchange → повертає відповідь
+                                    ↓
+                    EmailService    NotificationService    AnalyticsService
+                    (незалежні consumer-и, можуть бути down і відновитись пізніше)
+```
+
+OrderService не знає про існування EmailService. Email-сервіс може оновлюватись, перезапускатись, масштабуватись — OrderService це не стосується. Повідомлення збережуться в черзі поки consumer недоступний.
+
+**Temporal decoupling** — producer і consumer не мають бути онлайн одночасно. Повідомлення живе в черзі (персистентна черга виживає після рестарту RabbitMQ) і буде оброблено коли consumer відновиться.
+
+---
+
+#### Work queue і масштабування consumer-ів
+
+Коли одна черга обробляється кількома consumer-ами паралельно — RabbitMQ за замовчуванням розподіляє повідомлення round-robin між ними. Але якщо consumer-и мають різну продуктивність, повільний consumer накопичує нероброблені повідомлення.
+
+**prefetch count** — обмежує скільки повідомлень broker може надіслати consumer-у без ack:
+
+```
+basic_qos(prefetch_count=1)
+```
+
+З `prefetch_count=1` broker не надсилає нове повідомлення consumer-у поки він не підтвердив попереднє. Повільний consumer отримує менше повідомлень — навантаження розподіляється справедливо. Для більшості задач `prefetch_count=10-50` — оптимальний баланс між пропускною здатністю і рівномірністю.
+
+Масштабування: запустити більше consumer-процесів або контейнерів → RabbitMQ автоматично розподіляє навантаження між ними. Горизонтальне масштабування обробки без змін у producer.
+
+---
+
+#### Message durability і персистентність
+
+За замовчуванням повідомлення в пам'яті — при рестарті RabbitMQ вони зникають. Для production:
+
+- Черга має бути `durable=true` — черга виживає після рестарту брокера
+- Повідомлення має бути `delivery_mode=2` (persistent) — зберігається на диск
+
+Обидві умови потрібні одночасно. Durable черга з non-persistent повідомленнями — повідомлення зникнуть. Non-durable черга з persistent повідомленнями — черга зникне і повідомлення разом з нею.
+
+Персистентність має ціну: disk I/O при кожному повідомленні збільшує latency. Для high-throughput систем де втрата окремих повідомлень прийнятна (метрики, logs) можна використовувати non-persistent.
+
+---
+
+#### Publisher confirms і гарантії доставки
+
+За замовчуванням `AMQP basic_publish` fire-and-forget — broker не підтверджує отримання. Якщо з'єднання розірвалось в момент публікації — повідомлення втрачено.
+
+**Publisher confirms** — broker надсилає ack producer-у після того як повідомлення збережено (в пам'яті або на диск). Producer чекає ack перед тим як вважати публікацію успішною. Це гарантує at-least-once від producer до broker.
+
+**Mandatory flag** — якщо повідомлення не може бути направлено в жодну чергу (немає binding) — broker повертає його producer-у через `basic.return`. Без mandatory — повідомлення мовчки відкидається.
+
+---
+
+#### RabbitMQ vs Redis Queue vs Kafka
+
+| | Redis Queue (List) | RabbitMQ | Kafka |
+|---|---|---|---|
+| Персистентність | In-memory (опційно RDB/AOF) | Disk (durable queues) | Disk (завжди) |
+| Retry і DLQ | Вручну | Вбудовано (DLE, x-death) | Вручну або через framework |
+| Routing | Немає | Flexible (direct/fanout/topic) | По topic + partition |
+| Consumer groups | Немає (тільки через Stream) | Competing consumers | Вбудовано |
+| Replay подій | Ні | Ні (повідомлення видаляється після ack) | Так (retention period) |
+| Throughput | Дуже високий | Середній-високий | Дуже високий |
+| Складність | Мінімальна | Помірна | Висока |
+| Use case | Прості черги, ephemeral tasks | Надійна async обробка, routing, retry | Event streaming, audit log, analytics |
+
+**Коли Redis Queue**: прості черги де втрата окремого повідомлення при збої прийнятна, або вже є Redis в стеку і не хочеться додавати новий сервіс.
+
+**Коли RabbitMQ**: потрібна надійна доставка, retry з DLQ, гнучкий routing, decoupling між сервісами. Більшість бекенд-систем де є async обробка.
+
+**Коли Kafka**: потрібен replay (переграти події з минулого), event sourcing, high-throughput streaming, аналітика. Kafka — лог подій, RabbitMQ — черга завдань.
+
+---
+
+#### Типові кейси в production
+
+**E-commerce:**
+- `order.created` → fanout → email-сервіс (підтвердження) + склад (резервування) + аналітика (статистика)
+- `payment.processed` → direct → billing-сервіс (invoice) + notification-сервіс (SMS)
+
+**Медіа-платформа:**
+- Завантаження відео → `video.uploaded` → черга транскодування; 10 worker-ів паралельно обробляють різні відео
+- DLQ якщо транскодування провалилось — alert команді, файл зберігається для ручної обробки
+
+**SaaS-продукт:**
+- Реєстрація → welcome email в чергу; якщо email-сервіс down — повідомлення в черзі, відправиться коли відновиться
+- Тижневий digest → scheduled job додає повідомлення в чергу для кожного user, worker відправляє поступово
+
+---
+
+#### Практичні рекомендації
+
+1. **Завжди durable черги і persistent повідомлення в production** — втрата задачі дорожча за overhead на disk I/O
+2. **prefetch_count=1 для початку** — справедливий розподіл; збільшувати якщо throughput недостатній
+3. **DLQ для кожної production черги** — без DLQ провалені повідомлення зникають; DLQ дозволяє розслідувати і повторно обробити
+4. **Publisher confirms для критичних операцій** — платежі, замовлення; для логів і метрик — не обов'язково
+5. **Один exchange, кілька черг** — не створювати окремий exchange на кожну чергу без потреби; direct exchange з різними routing key — часто достатньо
+6. **Ідемпотентність consumer-ів** — at-least-once гарантія означає що повідомлення може прийти двічі (після redeliver); consumer має обробляти дублікати безпечно
+
+---
+
+#### Міні-шпаргалка
+
+- **RabbitMQ**: message broker (AMQP); producer → exchange → queue → consumer
+- **Exchange types**: direct (точний ключ), fanout (broadcast), topic (wildcard `*`/`#`)
+- **Ack**: consumer підтверджує після обробки; без ack при краші → повторна доставка (at-least-once)
+- **Retry**: nack(requeue=false) + Dead Letter Exchange → черга затримки (TTL) → повернення в основну
+- **DLQ**: фінальна черга після вичерпання retry → alert + ручна обробка, нічого не втрачається
+- **Decoupling**: producer не знає про consumer; temporal decoupling — не мають бути онлайн одночасно
+- **prefetch_count**: скільки повідомлень consumer тримає без ack; `=1` — справедливий розподіл між worker-ами
+- **vs Redis**: Redis — просто і швидко, немає вбудованого retry/routing; RabbitMQ — надійність і routing
+- **vs Kafka**: RabbitMQ — черга задач (видаляє після ack); Kafka — лог подій (зберігає, replay можливий)
+
+</details>
+
+<a id="34"></a>
+
+### 34. Що таке міграції бази даних і чому вони важливі в командній розробці? Поясніть version control схеми БД, repeatable deployment, rollback та роль міграцій у CI/CD.
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Загальна відповідь
+
+Міграція бази даних — це версіонований, автоматизований скрипт що змінює схему або дані БД контрольованим способом. Кожна міграція описує конкретну зміну (`ALTER TABLE`, `CREATE INDEX`, `UPDATE` даних) і зберігається у git разом з кодом застосунку.
+
+Без міграцій схема БД — це «темна матерія»: ніхто точно не знає в якому стані БД на кожному оточенні, зміни вносяться вручну через phpMyAdmin або psql, різні розробники мають різні локальні схеми, deploy на production — це стрес і ручна робота. Міграції вирішують усе це: схема стає частиною кодової бази, відтворюваною, переглядуваною і автоматизованою.
+
+---
+
+#### Проблема без міграцій
+
+Класична ситуація в команді без міграцій:
+
+Розробник А додає стовпець `discount_percent` до таблиці `orders` напряму в production через phpMyAdmin. Розробник Б цього не знає — його локальна БД не має цього стовпця. Код Б падає локально з помилкою. На staging теж немає цього стовпця — там теж все ламається. Ніхто не знає що і коли змінювалось. Відкат неможливий без ручного DROP COLUMN.
+
+Міграції роблять цю зміну явною: файл `2024_01_15_add_discount_percent.sql` з'являється в git, проходить code review, запускається автоматично на всіх оточеннях.
+
+---
+
+#### Структура і версіонування міграцій
+
+Кожна міграція — окремий файл з іменем що містить версію (зазвичай timestamp або sequential number):
+
+```
+migrations/
+  001_create_users_table.sql
+  002_add_email_verified.sql
+  003_create_orders_table.sql
+  004_add_discount_to_orders.sql
+  005_create_products_index.sql
+```
+
+Або у фреймворках (Laravel, Symfony, Flyway):
+
+```
+migrations/
+  2024_01_10_000000_create_users_table.php
+  2024_01_12_143022_add_email_verified_to_users.php
+  2024_01_15_091500_add_discount_to_orders.php
+```
+
+**Таблиця версій.** Інструмент міграцій зберігає в БД спеціальну таблицю (`migrations`, `schema_migrations`, `flyway_schema_history`) де відслідковує які міграції вже виконані. При запуску — порівнює файли на диску з таблицею і запускає тільки нові:
+
+```sql
+-- Laravel migrations table
+SELECT migration FROM migrations ORDER BY batch;
+-- 2024_01_10_000000_create_users_table
+-- 2024_01_12_143022_add_email_verified_to_users
+-- ↑ виконані; наступна: 2024_01_15_091500_add_discount_to_orders
+```
+
+---
+
+#### Up і Down: forward і rollback
+
+Класична міграція має два методи:
+
+**Up** — застосувати зміну (forward migration):
+```sql
+-- up
+ALTER TABLE orders ADD COLUMN discount_percent DECIMAL(5,2) DEFAULT 0;
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+```
+
+**Down** — скасувати зміну (rollback):
+```sql
+-- down
+DROP INDEX idx_orders_user_id ON orders;
+ALTER TABLE orders DROP COLUMN discount_percent;
+```
+
+Down-міграція дозволяє відкотити останню або кілька останніх змін. Але є важливе обмеження: down-міграція що видаляє стовпець або таблицю — деструктивна. Якщо в стовпці вже були дані — вони втрачаються при rollback. Тому rollback через down-міграцію підходить для відкату в межах поточного deployment; для відновлення після втрати даних потрібен backup.
+
+Деякі команди взагалі не пишуть down-міграції (тільки forward), і відкат реалізують через нову forward-міграцію що скасовує попередню. Це безпечніше для production.
+
+---
+
+#### Версіонування схеми в git
+
+Міграції зберігаються в git разом з кодом. Це дає:
+
+**Зв'язок між кодом і схемою.** Зміна схеми і код що її використовує — в одному PR. Code review бачить і DDL і PHP/Python/Go разом. Легко зрозуміти контекст: навіщо доданий стовпець.
+
+**Повна історія змін схеми.** `git log migrations/` показує всі зміни схеми з датою, автором і причиною (з commit message). Для audit і debugging це безцінно.
+
+**Відтворюваність оточення.** Новий розробник клонує репозиторій, запускає `php artisan migrate` або `flyway migrate` — і отримує точну копію схеми production. Немає «у мене локально все інакше».
+
+**Конфлікти.** Якщо два розробники одночасно створили міграцію з однаковим timestamp або sequential number — git merge conflict або помилка при виконанні. Це явний сигнал що потрібна координація. Краще ніж мовчазне розходження схем.
+
+---
+
+#### Repeatable deployment
+
+Міграції роблять deployment детермінованим і повторюваним. Один і той самий набір міграцій, запущений з нуля, завжди дає однакову схему. Це основа для:
+
+**Multiple environments.** Local → dev → staging → production — на кожному оточенні схема завжди відповідає коду в цій гілці. CI автоматично застосовує міграції при deploy.
+
+**Нові оточення.** Потрібно підняти нове staging або demo — запускаєш міграції і отримуєш актуальну схему без ручного копіювання.
+
+**Disaster recovery.** При відновленні з backup: відновлюємо дані, потім накочуємо міграції що вийшли після backup — схема актуальна.
+
+---
+
+#### Міграції в CI/CD
+
+Типова інтеграція міграцій у pipeline:
+
+```
+git push → CI pipeline:
+  1. Run unit tests (in-memory або test DB)
+  2. Run migrations на test DB
+  3. Run integration tests проти мігрованої схеми
+  4. Build Docker image
+  5. Deploy to staging
+  6. Run migrations на staging DB   ← автоматично
+  7. Run smoke tests
+  8. Deploy to production
+  9. Run migrations на production DB ← автоматично
+```
+
+**Zero-downtime deployment і міграції.** Проблема: код і міграція деплояться не атомарно. Між моментом коли стара версія коду ще працює і новою вже запустилась — схема вже змінена (або ще ні). Це вікно неконсистентності.
+
+Підхід **expand-contract** (backward-compatible migrations):
+
+*Expand* (додаємо нове, не видаляємо старе):
+- Додати новий стовпець `new_column` (nullable або з DEFAULT)
+- Стара версія коду: не знає про `new_column`, ігнорує → не ламається
+- Нова версія коду: пише в обидва стовпці, читає з `new_column`
+
+*Migrate data* (фонова задача або окрема міграція):
+- Заповнити `new_column` даними з `old_column` для існуючих рядків
+
+*Contract* (видалити старе у наступному deployment):
+- Наступний PR: DROP COLUMN `old_column`
+- Тепер нова версія вже в production і не залежить від старого стовпця
+
+Цей підхід гарантує що в будь-який момент і стара і нова версія коду сумісна зі схемою. Критично для систем де потрібен zero-downtime deploy (rolling update де кілька версій коду працюють паралельно).
+
+---
+
+#### Важкі міграції на production: онлайн DDL
+
+`ALTER TABLE` на таблиці з мільйонами рядків — потенційна проблема. MySQL InnoDB копіює таблицю при більшості DDL-операцій: весь час копіювання таблиця заблокована для запису → downtime.
+
+**Online DDL в MySQL 8.0** — більшість операцій (`ADD COLUMN`, `ADD INDEX`, `RENAME COLUMN`) виконуються без блокування таблиці або з мінімальним блокуванням. Але є винятки: `CHANGE COLUMN` зі зміною типу, деякі операції з FULLTEXT — все ще потребують rebuild.
+
+**pt-online-schema-change** (Percona) і **gh-ost** (GitHub) — зовнішні інструменти для безпечного DDL на великих таблицях:
+- Створюють копію таблиці з новою схемою
+- Поступово переносять дані (`chunked copy`)
+- Синхронізують нові зміни через тригери або binlog
+- Атомарно перемикають таблиці в момент коли копія актуальна
+- Без блокування і без downtime
+
+gh-ost надійніший для production: не використовує тригери (тільки binlog), менше overhead, підтримує throttle і pause.
+
+---
+
+#### Міграції даних vs міграції схеми
+
+Міграції бувають двох типів:
+
+**Schema migrations** (DDL) — `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`. Змінюють структуру.
+
+**Data migrations** (DML) — `UPDATE`, `INSERT`, `DELETE` для перетворення існуючих даних під нову схему:
+
+```sql
+-- Після додавання status_id замість status VARCHAR
+UPDATE orders SET status_id = (
+    SELECT id FROM order_statuses WHERE name = orders.status
+);
+```
+
+Великі data migrations на production потребують особливої обережності:
+- `UPDATE` мільйонів рядків в одній транзакції → величезний undo log, блокування, можливий timeout
+- Краще обробляти батчами: `UPDATE orders SET ... WHERE id BETWEEN ? AND ? LIMIT 1000`
+- Запускати фоново або в maintenance window, а не в момент deploy
+
+---
+
+#### Типові помилки з міграціями
+
+**Редагування вже виконаної міграції.** Якщо міграція вже запущена на production і в ній є помилка — не можна її редагувати. Інструмент порівнює по checksum або імені; якщо файл змінився — помилка або ігнорування. Правильно: нова міграція що виправляє попередню.
+
+**DDL всередині транзакції.** MySQL DDL (`ALTER TABLE`, `CREATE TABLE`) викликає implicit COMMIT. Транзакція навколо `ALTER TABLE` не захистить від часткового виконання. PostgreSQL дозволяє DDL у транзакції — можна обернути кілька DDL-операцій і відкотити при помилці. В MySQL — ні.
+
+**Деструктивні міграції без backup.** `DROP TABLE`, `DROP COLUMN`, `TRUNCATE` в міграції без попередньої перевірки — ризик втрати даних. Правило: перед деструктивною міграцією переконатись що backup актуальний і перевірений.
+
+**Long-running міграція без тестування.** `ALTER TABLE orders ADD INDEX ...` на 500М рядків може йти години. Тестувати на staging з реальним обсягом даних перед production.
+
+---
+
+#### Інструменти
+
+**Laravel (Artisan Migrate):** вбудовано, PHP класи з методами `up()`/`down()`, команди `migrate`, `migrate:rollback`, `migrate:status`.
+
+**Flyway:** Java-based, популярний у JVM-екосистемі і PHP, SQL-файли з конвенцією іменування `V1__description.sql`, підтримує repeatable migrations (`R__`) для views/procedures.
+
+**Liquibase:** XML/YAML/JSON/SQL changeset формат, підтримує різні СУБД, rollback, preconditions, changelogs.
+
+**Doctrine Migrations (Symfony/PHP):** генерує міграції з diff між поточною і очікуваною схемою.
+
+**Alembic (Python/SQLAlchemy):** Python-based, auto-generate з моделей, підтримує branches.
+
+---
+
+#### Міні-шпаргалка
+
+- **Міграція** — версіонований скрипт зміни схеми/даних; зберігається в git разом з кодом
+- **Таблиця версій** — broker відслідковує які міграції вже виконано; запускає тільки нові
+- **Up/Down** — forward зміна і rollback; down-міграція деструктивна якщо видаляє дані
+- **Версіонування в git** — код і схема в одному PR; повна історія; відтворюваність оточень
+- **CI/CD**: міграції запускаються автоматично при deploy; тести після міграції, не до
+- **Expand-contract** — backward-compatible міграції для zero-downtime: спочатку додати нове, потім видалити старе в окремому deploy
+- **Важкі DDL**: gh-ost або pt-osc для ALTER TABLE на великих таблицях без downtime
+- **Data migrations батчами** — великі UPDATE обробляти частинами, не в одній транзакції
+- **Не редагувати виконані міграції** — тільки нова міграція може виправити попередню
 
 </details>
