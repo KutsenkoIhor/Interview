@@ -127,6 +127,15 @@
 
 95. [Що таке RabbitMQ і для яких задач його доцільно використовувати в PHP-системах?](#95)
 96. [Як використовуються черги в PHP-застосунках і які проблеми вони допомагають вирішувати?](#96)
+97. [Що таке Redis і які задачі він вирішує в сучасному бекенді?](#97)
+98. [Як зберігаються дані в Redis і Memcached і чим відрізняються ці інструменти?](#98)
+99. [У чому плюси і мінуси Redis та Memcached для кешування?](#99)
+100. [Як організувати роботу з файлами в Amazon S3 у PHP-застосунку?](#100)
+101. [Що таке sensitive data, як її правильно зберігати і як вона має поводитися в логах та інтеграціях?](#101)
+102. [Що таке хеш-функція і де вона використовується в бекенд-розробці?](#102)
+103. [Що таке фільтр Блума і в яких задачах він може бути корисним?](#103)
+
+## Блок 11. Веб, API та прикладні підходи
 
 ---
 
@@ -9708,6 +9717,804 @@ Laravel Horizon — веб-інтерфейс для моніторингу Redi
 - Ідемпотентність: повторне виконання = безпечний результат; перевіряти стан перед дією
 - Supervisor: управляє workers, перезапускає при падінні
 - Horizon: моніторинг Redis-черг; throughput, failed jobs, workers
+
+</details>
+
+---
+
+<a id="97"></a>
+
+### 97. Що таке Redis і які задачі він вирішує в сучасному бекенді?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Redis (Remote Dictionary Server)** — in-memory сховище даних з підтримкою персистентності. Зберігає дані у RAM — звідси мікросекундна latency. Підтримує багаті структури даних, TTL per key, pub/sub, транзакції, скриптинг на Lua.
+
+Redis — далеко не просто "кеш". Він виконує ролі кількох різних систем залежно від сценарію.
+
+---
+
+**Задачі які Redis вирішує:**
+
+**Кешування** — найочевидніше застосування. Результати дорогих запитів до БД, відрендерений HTML, агреговані дані API. TTL per key, LRU eviction при заповненні пам'яті. (Детально в Q82–Q84)
+
+**Сесії** — зберігання PHP-сесій в Redis замість файлів. Доступні всім серверам кластера — умова для stateless горизонтального масштабування. (Q76)
+
+**Черги задач** — Laravel Queue з Redis driver. `LPUSH` для додавання задачі, `BRPOP` для блокуючого читання worker'ом. Простіше за RabbitMQ для базових сценаріїв.
+
+**Rate limiting** — лічильники запитів з автоматичним скиданням через TTL. `INCR` атомарний, `EXPIRE` встановлює вікно. Для sliding window — Sorted Set з timestamp як score.
+
+```php
+// Fixed window rate limit: 100 req/хвилину
+$key   = "rate_limit:{$userId}:" . floor(time() / 60);
+$count = $redis->incr($key);
+$redis->expire($key, 60);
+
+if ($count > 100) {
+    throw new TooManyRequestsException();
+}
+```
+
+**Distributed Lock** — `SET key value NX EX 10` атомарно встановлює lock тільки якщо ключа ще немає. Використовується для запобігання паралельного виконання критичних секцій між процесами або серверами.
+
+**Pub/Sub і Streams** — повідомлення в реальному часі між компонентами. Redis Streams (XADD/XREAD) — стійка черга подій з consumer groups, схожа на Kafka але простіша.
+
+**Лічильники і статистика** — атомарні INCR/DECR без race condition. Підрахунок переглядів, лайків, активних сесій — без навантаження на основну БД.
+
+**Геопросторові запити** — `GEOADD`, `GEORADIUS`: зберігати координати і шукати об'єкти в радіусі. Для "знайти заклади поруч" без PostgreSQL PostGIS.
+
+**HyperLogLog** — апроксимований підрахунок унікальних значень (~0.8% похибка) за константну пам'ять (12KB). `PFADD`/`PFCOUNT` для uniq visitors, uniq events.
+
+---
+
+**Персистентність Redis:**
+
+На відміну від Memcached, Redis може зберігати дані на диск:
+- **RDB (snapshot)**: повний дамп у файл кожні N секунд або M змін. Швидкий рестарт, але можлива втрата даних між снапшотами.
+- **AOF (Append Only File)**: кожна команда записується в лог. Надійніше, але більший файл і повільніший рестарт.
+- **Без персистентності**: суто in-memory, максимальна швидкість, після рестарту — порожній.
+
+Вибір залежить від сценарію: кеш — без персистентності; сесії/черги — AOF або RDB.
+
+---
+
+**Redis Sentinel і Redis Cluster:**
+
+**Sentinel** — HA (high availability) для одного шарду: моніторить master, автоматичний failover на replica при падінні. Для більшості PHP-застосунків — достатньо.
+
+**Cluster** — горизонтальне масштабування: дані автоматично шардуються між кількома вузлами. Для дуже великих обсягів даних що не вміщуються в одному вузлі.
+
+#### Міні-шпаргалка
+
+- Redis: in-memory + персистентність; мікросекундна latency; багаті структури даних
+- Кеш, сесії, черги, rate limiting, distributed lock, pub/sub, лічильники, geo, HyperLogLog
+- Персистентність: RDB (снапшот) або AOF (лог команд); кеш — без персистентності
+- Атомарні операції: INCR, SET NX, GETSET — для rate limit і distributed lock без race condition
+- Sentinel → HA (failover); Cluster → шардинг (горизонтальне масштабування)
+- Redis Streams — легка альтернатива Kafka для event-driven всередині одного стеку
+
+</details>
+
+---
+
+<a id="98"></a>
+
+### 98. Як зберігаються дані в Redis і Memcached і чим відрізняються ці інструменти?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Обидва — in-memory key-value сховища. Але їхня внутрішня модель і можливості суттєво відрізняються.
+
+---
+
+**Memcached — проста модель:**
+
+Memcached зберігає тільки рядки (byte strings) за рядковим ключем. Ніяких вкладених структур — якщо треба зберегти масив, потрібно серіалізувати його перед записом і десеріалізувати після читання.
+
+Внутрішньо використовує **slab allocator** — пам'ять розділена на chunks фіксованих розмірів. При записі значення потрапляє в chunk відповідного розміру. Це мінімізує фрагментацію пам'яті і дає передбачуваний розподіл.
+
+Eviction — тільки LRU (Least Recently Used): при заповненні витісняються найдавніше використані ключі.
+
+Розподілений за своєю природою: Memcached не знає про інші вузли. Клієнт сам вирішує на який сервер відправити ключ через consistent hashing. Немає реплікації між вузлами — якщо сервер впав, дані з нього втрачені.
+
+Багатопотоковий: один Memcached процес ефективно використовує всі ядра CPU.
+
+```php
+$memcached = new Memcached();
+$memcached->addServer('127.0.0.1', 11211);
+
+$memcached->set('user:1', serialize(['name' => 'Alice', 'email' => '...'])); // треба серіалізувати
+$user = unserialize($memcached->get('user:1'));
+```
+
+---
+
+**Redis — складніша модель:**
+
+Redis зберігає дані у вбудованих структурах: String, List, Hash, Set, Sorted Set, Stream, HyperLogLog, Bitmap, Geo. Кожна структура має власний внутрішній формат зберігання, оптимізований за розміром і операціями.
+
+Наприклад, Hash з малою кількістю полів (< `hash-max-listpack-entries`) зберігається як компактний listpack (плоский масив у пам'яті), а при зростанні автоматично перетворюється на hashtable. Це дозволяє зберігати тисячі маленьких hash-ів дуже ефективно.
+
+Redis — **однопотоковий** для виконання команд. Одна команда виконується атомарно, без race condition між командами. Паралельна обробка I/O через event loop (реактор), але команди — по черзі. Це спрощує семантику, але є обмеженням пропускної здатності на одному ядрі (хоча типово Redis обробляє 100k+ ops/sec).
+
+TTL можна встановити на будь-який ключ. При закінченні TTL Redis видаляє ключ у фоні (lazy expiration + active expiration cycle).
+
+Персистентність: RDB/AOF (детально в Q97). Memcached — ніякої персистентності.
+
+Реплікація: Redis підтримує master-replica реплікацію. Sentinel для failover.
+
+```php
+// Redis: нативні структури без ручної серіалізації
+$redis->hSet('user:1', 'name', 'Alice');
+$redis->hSet('user:1', 'email', 'alice@example.com');
+$redis->expire('user:1', 3600);
+
+$name  = $redis->hGet('user:1', 'name');    // 'Alice'
+$user  = $redis->hGetAll('user:1');         // асоціативний масив
+```
+
+---
+
+**Порівняльна таблиця:**
+
+| | Redis | Memcached |
+|---|---|---|
+| Структури даних | String, List, Hash, Set, ZSet, Stream... | Тільки String |
+| Персистентність | RDB / AOF | Ні |
+| Реплікація | Так (master-replica) | Ні (клієнтський sharding) |
+| Потоковість | Однопотоковий | Багатопотоковий |
+| TTL | Per key | Per key |
+| Pub/Sub | Так | Ні |
+| Lua scripting | Так | Ні |
+| Споживання RAM | Дещо більше | Менше |
+| Операції | Atomic per command | Atomic per command |
+
+#### Міні-шпаргалка
+
+- Memcached: тільки string; slab allocator; немає персистентності; клієнтський sharding; багатопотоковий
+- Redis: String/List/Hash/Set/ZSet/Stream; RDB/AOF персистентність; реплікація; однопотоковий (atomic)
+- Redis зберігає структури нативно — не треба серіалізувати масиви
+- Memcached — менше overhead пам'яті; Redis — більше можливостей
+- Redis compact encoding: маленькі структури зберігаються як listpack → ефективно
+
+</details>
+
+---
+
+<a id="99"></a>
+
+### 99. У чому плюси і мінуси Redis та Memcached для кешування?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Обидва відмінно підходять для кешування, але мають різні сильні сторони. Вибір залежить від вимог проєкту.
+
+---
+
+**Redis — плюси для кешування:**
+
+**Персистентність.** При рестарті Redis відновлює кеш з диска (RDB/AOF). Немає cold start — вся закешована інформація доступна одразу. Для Memcached після рестарту весь кеш порожній, і потрібен прогрів.
+
+**Багаті структури даних.** Можна кешувати не тільки рядки, але й Hash (частково оновлювати окремі поля об'єкта без перезапису всього), Sorted Set (закешований рейтинг з можливістю зміни score одного елемента), List (черга останніх подій).
+
+```php
+// Кешувати тільки одне поле без перезапису всього об'єкта
+$redis->hSet("user:$id", 'last_login', now()->toIso8601String());
+// Не потрібно get → deserialize → modify → serialize → set
+```
+
+**Атомарні операції.** INCR/DECR без race condition, SET NX для atomic "перший запис виграє", GETSET для atomic read-and-replace.
+
+**Tag-based invalidation через Set.** Зберігати множину ключів для тегу: при інвалідації тегу пройтись по Set і видалити всі пов'язані ключі. Symfony Cache Tags реалізовано саме так.
+
+**Lua scripting.** Атомарні складні операції без round-trips між PHP і Redis. Наприклад, token bucket для rate limiting в одному atomic кроці.
+
+**Redis — мінуси для кешування:**
+
+Однопотоковий — при дуже високому throughput (мільйони ops/sec) стає bottleneck. Redis 6+ частково вирішує через I/O threading, але команди все одно однопотокові.
+
+Дещо більше споживання пам'яті через metadata і rich structures порівняно з Memcached.
+
+Складніша операційна підтримка: Sentinel або Cluster для HA і масштабування.
+
+---
+
+**Memcached — плюси для кешування:**
+
+**Простота і фокус.** Memcached робить одне — кешує рядки. Немає зайвих можливостей, конфігурація мінімальна.
+
+**Багатопотоковість.** Ефективно використовує всі ядра CPU. При дуже великій кількості паралельних запитів (millions/sec) Memcached може мати вищий throughput ніж Redis на одному вузлі.
+
+**Нижчий overhead пам'яті** для простих string-значень. Slab allocator ефективніший для однотипних значень.
+
+**Горизонтальне масштабування вбудоване в клієнта.** Consistent hashing між вузлами без потреби в Redis Cluster. Просто додати вузол.
+
+**Memcached — мінуси для кешування:**
+
+Немає персистентності — cold start після рестарту. В Kubernetes де pods часто перезапускаються — проблема.
+
+Лише string — складні об'єкти треба серіалізувати/десеріалізувати повністю. Не можна оновити одне поле.
+
+Немає реплікації — при падінні вузла дані втрачені. Клієнтський sharding означає що при додаванні вузла великий відсоток ключів потрапить на інший вузол (якщо не consistent hashing).
+
+Немає TTL per key (є, але немає гнучкого управління), немає pub/sub, Lua, streams.
+
+---
+
+**Підсумок вибору:**
+
+Якщо проєкт вже використовує Redis (сесії, черги, rate limiting) — використовувати Redis і для кешування. Один інструмент замість двох — менше операційної складності.
+
+Memcached має сенс коли: вже є в інфраструктурі, потрібне максимально просте рішення тільки для кешування string-значень, або коли throughput є критичним і Redis стає bottleneck (рідкий сценарій).
+
+На практиці: більшість нових PHP-проєктів обирають Redis. Memcached залишається у legacy-системах або дуже специфічних high-throughput сценаріях.
+
+#### Міні-шпаргалка
+
+- **Redis плюси**: персистентність (no cold start), rich structures, atomic ops, tag invalidation, Lua
+- **Redis мінуси**: однопотоковий, більше RAM overhead, складніша HA
+- **Memcached плюси**: простота, багатопотоковий, менше RAM для strings, вбудований sharding
+- **Memcached мінуси**: немає персистентності, тільки string, немає реплікації
+- Правило: якщо вже є Redis (черги, сесії) — використовувати для кешування теж
+- Memcached актуальний: legacy, maximum-throughput string cache, простота важливіша за features
+
+</details>
+
+---
+
+<a id="100"></a>
+
+### 100. Як організувати роботу з файлами в Amazon S3 у PHP-застосунку?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Amazon S3 — об'єктне сховище: файли зберігаються як об'єкти з ключем (шляхом) у bucket'ах. Підходить для: завантажених користувачами файлів, згенерованих звітів, медіа-контенту, резервних копій.
+
+---
+
+**Абстракція через Filesystem (Flysystem):**
+
+Ніколи не прив'язуватись до конкретного SDK напряму. Flysystem (використовується в Laravel Storage) надає єдиний інтерфейс для локального диска, S3, GCS, SFTP — код не змінюється при зміні сховища.
+
+```php
+// Laravel Storage — той самий API для будь-якого driver
+Storage::disk('s3')->put('reports/2024/january.pdf', $content);
+$url  = Storage::disk('s3')->url('reports/2024/january.pdf');
+$file = Storage::disk('s3')->get('reports/2024/january.pdf');
+Storage::disk('s3')->delete('reports/2024/january.pdf');
+
+// В тестах — підміна на local disk без змін коду
+Storage::fake('s3');
+```
+
+Конфігурація `config/filesystems.php`:
+```php
+'s3' => [
+    'driver'   => 's3',
+    'key'      => env('AWS_ACCESS_KEY_ID'),
+    'secret'   => env('AWS_SECRET_ACCESS_KEY'),
+    'region'   => env('AWS_DEFAULT_REGION'),
+    'bucket'   => env('AWS_BUCKET'),
+    'url'      => env('AWS_URL'),       // CDN URL якщо є
+    'endpoint' => env('AWS_ENDPOINT'),  // для LocalStack у dev
+]
+```
+
+---
+
+**Архітектурні рішення:**
+
+**1. Presigned URL для upload — PHP не проксіює файл:**
+
+Класична помилка: клієнт → PHP → S3 для завантаження файлу. PHP стає bottleneck і займає worker під час завантаження великого файлу.
+
+Правильно: PHP генерує presigned URL → клієнт завантажує напряму в S3 без участі PHP.
+
+```php
+// PHP генерує тимчасове посилання для прямого завантаження в S3
+public function getUploadUrl(string $filename, string $contentType): array
+{
+    $s3     = new S3Client(['region' => 'eu-west-1', 'version' => 'latest']);
+    $key    = 'uploads/' . Str::uuid() . '/' . $filename;
+
+    $cmd    = $s3->getCommand('PutObject', [
+        'Bucket'      => config('filesystems.disks.s3.bucket'),
+        'Key'         => $key,
+        'ContentType' => $contentType,
+    ]);
+
+    $presigned = $s3->createPresignedRequest($cmd, '+15 minutes');
+
+    return [
+        'upload_url' => (string) $presigned->getUri(),
+        'key'        => $key,
+        'expires_in' => 900,
+    ];
+}
+// Клієнт PUT безпосередньо на presigned URL
+// PHP worker вільний весь час завантаження
+```
+
+**2. Presigned URL для download — приватні файли:**
+
+Файли в S3 можуть бути приватними (без публічного доступу). PHP генерує тимчасове посилання для читання:
+
+```php
+$url = Storage::disk('s3')->temporaryUrl(
+    'invoices/user-42/invoice-123.pdf',
+    now()->addMinutes(30) // посилання діє 30 хвилин
+);
+// Перенаправити клієнта на це URL — файл завантажується напряму з S3
+return redirect($url);
+```
+
+**3. Структура ключів у bucket:**
+
+```
+uploads/
+  {year}/{month}/{uuid}/{original-filename}  # user uploads
+reports/
+  {year}/{month}/{report-id}.pdf             # generated
+avatars/
+  {user-id}/{size}/{hash}.webp               # processed media
+```
+
+Ніколи не використовувати оригінальне ім'я файлу від користувача як ключ — path traversal і конфлікти. UUID або хеш гарантують унікальність.
+
+**4. CDN перед S3:**
+
+CloudFront (або Cloudflare) — CDN поверх S3. Файли кешуються на edge-нодах, ближчих до користувача. Публічний URL — CDN домен, а не S3. Дешевше і швидше ніж прямі запити в S3.
+
+```php
+// Замість https://bucket.s3.amazonaws.com/key
+// Публічний URL через CDN:
+'url' => 'https://cdn.myapp.com'
+```
+
+**5. LocalStack для локальної розробки:**
+
+Запускати S3-сумісний сервер локально без реального AWS:
+
+```yaml
+# docker-compose.yml
+localstack:
+  image: localstack/localstack
+  environment:
+    - SERVICES=s3
+  ports:
+    - "4566:4566"
+```
+
+```php
+// .env.local
+AWS_ENDPOINT=http://localstack:4566
+AWS_USE_PATH_STYLE_ENDPOINT=true
+```
+
+Розробники не потребують AWS credentials, тести не ходять в реальний S3.
+
+**6. Валідація файлів до завантаження:**
+
+```php
+$request->validate([
+    'file' => 'required|file|mimes:pdf,docx|max:10240', // max 10MB
+]);
+// Перевірити MIME-тип за вмістом (не тільки розширенням)
+// Сканувати на віруси (ClamAV) перед збереженням
+```
+
+#### Міні-шпаргалка
+
+- Flysystem (Laravel Storage): єдиний API для S3/local/GCS; `Storage::fake('s3')` в тестах
+- **Presigned URL для upload**: клієнт завантажує напряму в S3; PHP worker вільний
+- **Presigned URL для download**: тимчасове посилання на приватний файл; `temporaryUrl()`
+- Ключ: `{category}/{uuid}/{filename}` — ніколи не оригінальне ім'я від користувача
+- CDN (CloudFront/Cloudflare) перед S3: швидше, дешевше, cache на edge
+- LocalStack: S3-сумісний локальний сервер для dev без реального AWS
+- Валідація: MIME за вмістом, розмір, антивірус перед збереженням
+
+</details>
+
+---
+
+<a id="101"></a>
+
+### 101. Що таке sensitive data, як її правильно зберігати і як вона має поводитися в логах та інтеграціях?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Sensitive data** — інформація, витік або некоректне зберігання якої несе ризик для користувача або бізнесу. Категорії: персональні дані (PII), фінансова інформація, облікові дані, медична інформація, конфіденційні бізнес-дані.
+
+---
+
+**Паролі — ніколи не зберігати у відкритому вигляді:**
+
+```php
+// НІКОЛИ так:
+$user->password = $password;            // plain text
+$user->password = md5($password);       // md5/sha1 — зламуються за лічені хвилини
+$user->password = sha256($password);    // без salt — rainbow tables
+
+// Правильно: bcrypt або Argon2
+$hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
+// або
+$hash = password_hash($password, PASSWORD_ARGON2ID, [
+    'memory_cost' => 65536,  // 64MB
+    'time_cost'   => 4,
+    'threads'     => 2,
+]);
+
+// Перевірка
+if (password_verify($inputPassword, $storedHash)) { /* OK */ }
+```
+
+`PASSWORD_ARGON2ID` — рекомендований у 2024 (захист від GPU і side-channel атак). `bcrypt` — надійний і широко підтримуваний.
+
+**Чому не MD5/SHA:** швидкі хеші — атакуються brute force/rainbow tables за хвилини. `bcrypt`/`Argon2` навмисно повільні і з salt.
+
+---
+
+**Шифрування чутливих даних у БД:**
+
+Дані що потрібно читати назад (номер картки, IBAN, SSN) — шифрування, не хешування:
+
+```php
+// Симетричне шифрування через libsodium (PHP 7.2+)
+$key        = sodium_crypto_secretbox_keygen(); // зберігати в secrets vault, не в БД
+$nonce      = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+$ciphertext = sodium_crypto_secretbox($plaintext, $nonce, $key);
+$stored     = base64_encode($nonce . $ciphertext); // nonce зберігаємо разом
+
+// Дешифрування
+$decoded   = base64_decode($stored);
+$nonce     = substr($decoded, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+$cipher    = substr($decoded, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+$plaintext = sodium_crypto_secretbox_open($cipher, $nonce, $key);
+```
+
+Ключ шифрування — в HashiCorp Vault, AWS Secrets Manager або KMS. Ніколи в `.env` або в коді.
+
+---
+
+**Токени і API ключі:**
+
+Не зберігати API keys у відкритому вигляді — зберігати хеш (SHA-256 достатньо для пошуку), оригінальний ключ показати користувачу лише один раз при генерації.
+
+```php
+// Генерація та збереження API key
+$rawToken  = bin2hex(random_bytes(32));     // 64-char hex, криптографічно безпечний
+$hashedToken = hash('sha256', $rawToken);
+
+// Зберігаємо hash, повертаємо raw один раз
+ApiToken::create(['token_hash' => $hashedToken, 'user_id' => $userId]);
+return $rawToken; // більше не можемо відновити
+
+// Перевірка при запиті:
+$incoming = hash('sha256', $request->bearerToken());
+$token    = ApiToken::where('token_hash', $incoming)->first();
+```
+
+---
+
+**Sensitive data в логах — маскування:**
+
+Логи зберігаються в Elasticsearch, Kibana, Datadog — куди мають доступ DevOps і підтримка. Паролі, токени, номери карток в логах — пряме порушення GDPR і PCI DSS.
+
+```php
+// Маскування в request логах
+class SanitizeRequestLog
+{
+    private const SENSITIVE_KEYS = ['password', 'token', 'credit_card', 'ssn', 'secret'];
+
+    public function sanitize(array $data): array
+    {
+        foreach ($data as $key => &$value) {
+            if (in_array(strtolower($key), self::SENSITIVE_KEYS)) {
+                $value = '***REDACTED***';
+            } elseif (is_array($value)) {
+                $value = $this->sanitize($value);
+            }
+        }
+        return $data;
+    }
+}
+```
+
+Laravel Telescope і Horizon автоматично маскують `password` в request даних. Для кастомних полів — `hideInputs(['credit_card'])`.
+
+---
+
+**Sensitive data в інтеграціях:**
+
+При передачі в сторонні сервіси (аналітика, CRM, трекери):
+- Передавати тільки необхідне — data minimization (GDPR принцип)
+- Псевдонімізація: замість email — `user_id` або HMAC від email
+- TLS для всіх зовнішніх з'єднань
+- Не логувати повні HTTP-запити/відповіді із зовнішніми API якщо там може бути PII
+
+---
+
+**Оточення і конфігурація:**
+
+```bash
+# .env — тільки для локальної розробки; в .gitignore
+# Production secrets — через:
+# AWS Secrets Manager, HashiCorp Vault, Kubernetes Secrets (encrypted)
+# Ніколи не хардкодити credentials у коді або docker-compose.yml
+```
+
+#### Міні-шпаргалка
+
+- Паролі: `password_hash(PASSWORD_ARGON2ID)` + `password_verify()`; ніяких MD5/SHA1
+- Дані що читати назад: libsodium `crypto_secretbox`; ключ — у Vault, не в `.env`
+- API токени: зберігати SHA-256 хеш; raw показати один раз при генерації
+- Логи: маскувати `password/token/card` → `***REDACTED***`; Laravel Telescope hideInputs
+- Інтеграції: data minimization, псевдонімізація, тільки TLS
+- Production secrets: AWS Secrets Manager / Vault / K8s Secrets — не в git
+
+</details>
+
+---
+
+<a id="102"></a>
+
+### 102. Що таке хеш-функція і де вона використовується в бекенд-розробці?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Хеш-функція** — детермінована функція що перетворює вхідні дані довільного розміру у вихідне значення фіксованого розміру (дайджест). Одні й ті самі вхідні дані завжди дають одне і те ж значення. Зворотне перетворення (відновлення вхідних даних з хешу) — обчислювально неможливе для криптографічних хешів.
+
+---
+
+**Властивості хорошої хеш-функції:**
+
+- **Детермінованість**: однаковий вхід → однаковий вихід
+- **Швидкість**: обчислення займає мілісекунди
+- **Лавинний ефект**: зміна одного біту вхідних даних змінює ~50% вихідних бітів
+- **Collision resistance**: практично неможливо знайти два різних входи з однаковим хешем
+- **Pre-image resistance**: з хешу неможливо відновити вхід
+
+---
+
+**Застосування в бекенд-розробці:**
+
+**1. Перевірка цілісності даних**
+
+```php
+// Верифікація завантаженого файлу
+$expectedHash = 'a1b2c3...'; // з офіційного джерела
+$actualHash   = hash_file('sha256', '/tmp/downloaded.zip');
+
+if (!hash_equals($expectedHash, $actualHash)) {
+    throw new IntegrityException('File corrupted or tampered');
+}
+```
+
+`hash_equals()` — обов'язково замість `===` для security-чутливих порівнянь: захищає від timing attack (однаковий час порівняння незалежно від позиції відмінності).
+
+**2. Генерація ETag для HTTP-кешування**
+
+```php
+$content  = $response->getContent();
+$etag     = md5($content); // для ETag достатньо, не для безпеки
+return $response->header('ETag', '"' . $etag . '"');
+// Браузер повторює запит з If-None-Match → 304 Not Modified якщо не змінилось
+```
+
+**3. Ключі кешу**
+
+```php
+// Детермінований ключ кешу з параметрів запиту
+$params = ['category' => 5, 'sort' => 'price', 'page' => 2];
+ksort($params);
+$cacheKey = 'catalog:' . md5(serialize($params));
+```
+
+**4. Підписи та HMAC (Hash-based Message Authentication Code)**
+
+HMAC поєднує хеш із секретним ключем — гарантує і цілісність, і автентичність:
+
+```php
+// Підписати вебхук-відповідь
+$secret    = config('services.stripe.webhook_secret');
+$payload   = $request->getContent();
+$signature = hash_hmac('sha256', $payload, $secret);
+
+// Верифікація на вашому сервері
+$expected = hash_hmac('sha256', $payload, $secret);
+if (!hash_equals($expected, $request->header('X-Stripe-Signature'))) {
+    abort(403, 'Invalid signature');
+}
+```
+
+Stripe, GitHub Webhooks, Laravel Signed URLs — всі використовують HMAC-SHA256.
+
+**5. Дедублікація і fingerprinting**
+
+```php
+// Знайти дублікати файлів
+$hash = hash_file('sha256', $uploadedFile->path());
+if (File::where('sha256', $hash)->exists()) {
+    return File::where('sha256', $hash)->first(); // повернути існуючий
+}
+```
+
+**6. Consistent hashing для розподілу даних**
+
+У розподілених системах (Memcached клієнт, Redis Cluster) consistent hashing визначає який вузол зберігає конкретний ключ. Мінімізує перерозподіл при додаванні/видаленні вузлів.
+
+---
+
+**Які хеш-функції для яких задач:**
+
+| Задача | Алгоритм | Примітка |
+|---|---|---|
+| Паролі | bcrypt, Argon2id | Навмисно повільні; НЕ MD5/SHA |
+| Цілісність файлів, ETag | SHA-256 | Швидкий, стійкий до колізій |
+| HMAC, підписи | SHA-256 | `hash_hmac('sha256', ...)` |
+| Ключі кешу, нон-крипто | MD5, xxHash | Швидко, не для безпеки |
+| Дедублікація | SHA-256, BLAKE3 | BLAKE3 — швидший за SHA-256 |
+
+MD5 і SHA-1 — не для криптографічних цілей (відомі колізії), але прийнятні для нон-security задач (ключі кешу, ETag).
+
+#### Міні-шпаргалка
+
+- Хеш: фіксований розмір виходу; детермінований; необоротний (криптографічний)
+- `hash_equals()` для порівняння — захист від timing attack
+- HMAC = хеш + секретний ключ; гарантує цілісність і автентичність
+- Задачі: цілісність файлів, ETag, ключі кешу, HMAC підписи, дедублікація
+- Паролі — тільки `password_hash()` (bcrypt/Argon2); ніяких `md5()`/`sha1()`
+- MD5/SHA-1 — для нон-security задач (кеш-ключі, ETag); не для безпеки
+
+</details>
+
+---
+
+<a id="103"></a>
+
+### 103. Що таке фільтр Блума і в яких задачах він може бути корисним?
+
+<details>
+<summary>Розкрири:</summary>
+
+#### Відповідь
+
+**Фільтр Блума (Bloom filter)** — імовірнісна структура даних для перевірки належності елемента до множини. Відповідає на питання "чи є елемент у множині?" з такими гарантіями:
+
+- **"Ні"** — абсолютно точно: елемент відсутній у множині
+- **"Так"** — ймовірно: елемент або є в множині, або це false positive
+
+Фільтр може помилково сказати "так" для елементів яких немає — **false positives**. Але ніколи не скаже "ні" для елементів які насправді є — **false negatives відсутні**.
+
+---
+
+**Як працює:**
+
+Фільтр — бітовий масив розміром `m` і `k` хеш-функцій.
+
+**Додавання елемента:** обчислюємо `k` хешів елемента → встановлюємо відповідні `k` бітів у `1`.
+
+**Перевірка:** обчислюємо `k` хешів → якщо всі `k` бітів = `1`, елемент **ймовірно є**; якщо хоч один = `0`, елемент **точно відсутній**.
+
+```
+Фільтр: [0][0][0][0][0][0][0][0]  (8 бітів, 2 хеш-функції)
+
+Додаємо "apple": hash1("apple")=1, hash2("apple")=5
+[0][1][0][0][0][1][0][0]
+
+Додаємо "banana": hash1("banana")=3, hash2("banana")=7
+[0][1][0][1][0][1][0][1]
+
+Перевірка "apple": біти 1 і 5 → обидва = 1 → "ймовірно є" ✓
+Перевірка "grape": hash1("grape")=1, hash2("grape")=3 → обидва = 1 → "ймовірно є" ← FALSE POSITIVE!
+Перевірка "cherry": hash1("cherry")=2, hash2("cherry")=6 → біт 2 = 0 → "точно відсутній" ✓
+```
+
+**Ключові властивості:**
+
+- Пам'ять: O(m) — набагато менше ніж зберігати всі елементи
+- Перевірка: O(k) — константна, незалежно від розміру множини
+- Видалення елементів — неможливе в базовому фільтрі (Counting Bloom Filter вирішує це)
+- Ймовірність false positive регулюється розміром `m` і кількістю хешів `k`
+
+---
+
+**Практичні задачі:**
+
+**1. Перевірка паролів проти списку скомпрометованих (HaveIBeenPwned)**
+
+HaveIBeenPwned зберігає 10+ мільярдів хешів паролів. Завантажити всі — гігабайти. Bloom filter з прийнятним false positive rate (~0.1%) займає мегабайти. Перевірка: якщо фільтр каже "відсутній" → пароль точно не скомпрометований (без false negative). Якщо "є" → зробити точний запит до API.
+
+**2. Захист від повторної обробки запитів (idempotency)**
+
+```php
+class IdempotencyFilter
+{
+    public function alreadyProcessed(string $requestId): bool
+    {
+        // Bloom filter: якщо "ні" — точно не обробляли → обробляємо
+        if (!$this->bloom->mightContain($requestId)) {
+            return false;
+        }
+        // "Так" (можливо false positive) → перевірити в БД для точності
+        return $this->db->exists('processed_requests', $requestId);
+    }
+
+    public function markProcessed(string $requestId): void
+    {
+        $this->bloom->add($requestId);
+        $this->db->insert('processed_requests', $requestId);
+    }
+}
+// Більшість запитів: швидка перевірка через Bloom → 0 запитів у БД
+// False positive: один додатковий запит у БД → правильна відповідь
+```
+
+**3. URL-фільтр (Safe Browsing)**
+
+Google Safe Browsing зберігає мільярди шкідливих URL у Bloom filter. Браузер перевіряє локально — якщо "відсутній" (99.9% URL) → без мережевого запиту. Тільки потенційно шкідливі URL верифікуються через сервер.
+
+**4. Перевірка унікальності в базі даних**
+
+Перед `INSERT` перевірити чи email вже існує — замість `SELECT COUNT(*)`:
+
+```php
+// Bloom filter зберігається в Redis (redis-py, redisbloom)
+if (!$bloom->exists($email)) {
+    // Точно немає → вставити без SELECT
+    $this->insert($email);
+    $bloom->add($email);
+} else {
+    // Ймовірно є → перевірити в БД
+    if ($this->db->emailExists($email)) {
+        throw new DuplicateEmailException();
+    }
+}
+```
+
+**5. CDN і кеш-прогнозування**
+
+CDN використовує Bloom filter щоб вирішити чи кешувати об'єкт: ресурс що запитується вперше — не кешувати (single hit wonder); якщо вже запитувався (фільтр каже "є") — закешувати.
+
+---
+
+**Redis Bloom Filter:**
+
+Redis Stack (або RedisBloom модуль) підтримує Bloom filter нативно:
+
+```php
+// Через phpredis або Predis з RedisBloom
+$redis->executeRawCommand('BF.ADD', 'my-filter', 'element1');
+$exists = $redis->executeRawCommand('BF.EXISTS', 'my-filter', 'element2');
+// BF.RESERVE my-filter 0.001 1000000  — створити з 0.1% false positive rate на 1M елементів
+```
+
+#### Міні-шпаргалка
+
+- Bloom filter: бітовий масив + k хеш-функцій; перевірка належності до множини
+- "Ні" → абсолютна гарантія відсутності; "Так" → ймовірно є (false positive можливий)
+- Пам'ять O(m) — у тисячі разів менше ніж зберігати всі елементи
+- Видалення неможливе (базовий); Counting Bloom Filter дозволяє видалення
+- Задачі: скомпрометовані паролі, idempotency check, Safe Browsing, унікальність перед INSERT
+- Redis Stack: `BF.ADD`, `BF.EXISTS` — нативна підтримка
 
 </details>
 
