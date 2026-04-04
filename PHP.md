@@ -137,6 +137,12 @@
 
 ## Блок 11. Веб, API та прикладні підходи
 
+104. [REST, stateless, ідемпотентність, авторизація, види API, OWASP і безпека бекенду](#104)
+
+## Блок 12. Нове в PHP
+
+105. [Що нового з'явилося в PHP 8.5?](#105)
+
 ---
 
 <a id="1"></a>
@@ -10515,6 +10521,525 @@ $exists = $redis->executeRawCommand('BF.EXISTS', 'my-filter', 'element2');
 - Видалення неможливе (базовий); Counting Bloom Filter дозволяє видалення
 - Задачі: скомпрометовані паролі, idempotency check, Safe Browsing, унікальність перед INSERT
 - Redis Stack: `BF.ADD`, `BF.EXISTS` — нативна підтримка
+
+</details>
+
+---
+
+<a id="104"></a>
+
+### 104. REST, stateless, ідемпотентність, авторизація, види API, OWASP і безпека бекенду
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+---
+
+### REST і ключові принципи хорошого API
+
+**REST** (Representational State Transfer) — це архітектурний стиль, а не протокол. Він описує набір обмежень, яким має відповідати система, щоб взаємодія між клієнтом і сервером була передбачуваною, масштабованою і простою.
+
+**Шість обмежень REST (Fielding, 2000):**
+
+| Обмеження | Суть |
+|---|---|
+| Client-Server | Відокремлення UI від бізнес-логіки; незалежна еволюція |
+| Stateless | Кожен запит містить всю необхідну інформацію; сервер не зберігає стан сесії |
+| Cache | Відповіді мають позначатися як кешовані або ні |
+| Uniform Interface | Єдиний інтерфейс: ресурси, representation, self-descriptive messages, HATEOAS |
+| Layered System | Клієнт не знає, з чим він спілкується — з сервером чи проксі |
+| Code on Demand | (опційно) Сервер може надсилати виконуваний код (JS) |
+
+**Ключові принципи хорошого API на практиці:**
+
+- **Ресурси, а не дії** — URI ідентифікує ресурс (`/orders/123`), а не операцію (`/getOrder?id=123`)
+- **HTTP-методи за призначенням** — `GET` для читання, `POST` для створення, `PUT/PATCH` для оновлення, `DELETE` для видалення
+- **Правильні HTTP-статуси** — 200, 201, 204, 400, 401, 403, 404, 409, 422, 500 — кожен несе семантику
+- **Версіонування** — `/v1/orders` або через `Accept: application/vnd.api+json;version=1`
+- **Консистентна структура відповідей** — помилки завжди в одному форматі
+- **Документація** — OpenAPI/Swagger як контракт, а не afterthought
+- **Пагінація** — завжди для колекцій (`limit/offset` або cursor-based)
+
+```php
+// Погано: RPC-стиль
+POST /api/createNewOrder
+POST /api/cancelOrder?id=5
+
+// Добре: REST-стиль
+POST   /api/v1/orders           // створити
+DELETE /api/v1/orders/5         // скасувати (або PATCH зі статусом)
+GET    /api/v1/orders?status=pending&limit=20
+```
+
+---
+
+### Stateless у контексті HTTP/API
+
+**Stateless** означає: кожен HTTP-запит є самодостатнім. Сервер не зберігає жодної інформації про попередні запити клієнта. Весь необхідний контекст (токен авторизації, параметри) передається з кожним запитом.
+
+**Чому це важливо:**
+
+- **Масштабування** — будь-який інстанс сервера може обробити будь-який запит, не потрібен sticky session або shared memory між процесами
+- **Відмовостійкість** — якщо один сервер падає, балансувальник перенаправляє на інший без втрати стану
+- **Простота** — сервер не тримає "відкритих сесій", не потрібно слідкувати за lifecycle клієнта
+- **Кешування** — stateless запити легко кешувати (відповідь залежить лише від запиту, не від "поточного стану сесії")
+
+**Що часто плутають зі statefull:**
+
+```
+Stateless НЕ означає відсутність стану в системі.
+БД, Redis, черги — зберігають стан.
+Stateless означає що HTTP-шар (сервер додатків) не тримає стан між запитами.
+```
+
+**Практична реалізація:**
+
+```php
+// Statefull (погано для REST API):
+$_SESSION['user_id'] = 123; // серверна сесія — прив'язує клієнта до інстансу
+
+// Stateless (добре):
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9... // JWT — весь контекст у токені
+```
+
+---
+
+### Ідемпотентність і HTTP-методи
+
+**Ідемпотентність** — властивість операції, при якій повторне виконання з тими самими параметрами дає той самий результат, що і перше виконання. N викликів = результат 1 виклику.
+
+```
+f(f(x)) = f(x)  // математичне визначення
+```
+
+**Ідемпотентні HTTP-методи:**
+
+| Метод | Ідемпотентний | Безпечний (safe) | Пояснення |
+|---|---|---|---|
+| GET | Так | Так | Тільки читання; повторний — той самий результат |
+| HEAD | Так | Так | Як GET, без тіла |
+| OPTIONS | Так | Так | Метадані |
+| PUT | Так | Ні | `PUT /orders/5` з тими самими даними → той самий стан |
+| DELETE | Так | Ні | Перший DELETE видаляє, наступні → 404, але стан системи однаковий |
+| POST | Ні | Ні | Кожен POST може створити новий ресурс |
+| PATCH | Не гарантовано | Ні | Залежить від реалізації (`SET qty=5` — ідемпотентно; `INCREMENT qty` — ні) |
+
+**Чому ідемпотентність важлива:**
+
+- Безпечний retry при network failure — якщо клієнт не отримав відповідь, він може повторити запит без ризику дублювання
+- Основа для надійних distributed systems
+
+**Idempotency Key для POST:**
+
+```php
+// Клієнт надсилає унікальний ключ
+POST /api/v1/payments
+Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
+
+// Сервер зберігає результат по ключу
+class PaymentController
+{
+    public function create(Request $request): JsonResponse
+    {
+        $key = $request->header('Idempotency-Key');
+
+        $cached = $this->idempotencyStore->get($key);
+        if ($cached) {
+            return response()->json($cached, 200); // повертаємо збережений результат
+        }
+
+        $payment = $this->paymentService->process($request->all());
+        $this->idempotencyStore->set($key, $payment->toArray(), ttl: 86400);
+
+        return response()->json($payment->toArray(), 201);
+    }
+}
+```
+
+---
+
+### Способи авторизації в API
+
+**1. API Key**
+
+Простий токен у заголовку або query string. Не несе інформації про користувача — тільки ідентифікує клієнта.
+
+```
+X-API-Key: sk_live_abc123...
+GET /api/v1/data?api_key=sk_live_abc123  // query string — гірше, потрапляє в логи
+```
+
+Використовував для: внутрішні сервіс-до-сервіс виклики, інтеграції з партнерами.
+
+**2. Basic Auth**
+
+`Authorization: Basic base64(username:password)`. Прийнятно лише по HTTPS. Зараз рідко для API, але часто для webhook-валідації або CI/CD.
+
+**3. Bearer Token (JWT)**
+
+Найпоширеніший підхід для stateless API.
+
+```php
+// JWT payload (декодований):
+{
+    "sub": "user_123",
+    "roles": ["admin"],
+    "exp": 1717000000,
+    "iat": 1716996400
+}
+
+// Middleware перевірка:
+class JwtMiddleware
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        $token = $request->bearerToken();
+        try {
+            $payload = JWT::decode($token, new Key(config('jwt.secret'), 'HS256'));
+            $request->setUserResolver(fn() => User::find($payload->sub));
+        } catch (ExpiredException) {
+            return response()->json(['error' => 'Token expired'], 401);
+        } catch (SignatureInvalidException) {
+            return response()->json(['error' => 'Invalid token'], 401);
+        }
+        return $next($request);
+    }
+}
+```
+
+**Проблеми з JWT:**
+- Не можна відкликати до expiration без blacklist (Redis)
+- Якщо секрет скомпрометовано — всі токени зламані
+- Payload видимий (base64, не шифрування) — не зберігати чутливі дані
+
+**4. OAuth 2.0**
+
+Стандарт делегованої авторизації. Дозволяє третій стороні отримати доступ від імені користувача без передачі пароля.
+
+```
+Client Credentials Flow — сервіс-до-сервіс (machine-to-machine)
+Authorization Code Flow — веб-застосунки з користувачем
+PKCE Flow — SPA і мобільні додатки (без client_secret)
+```
+
+Використовував для: SSO, інтеграції з Google/GitHub login, внутрішній authorization server (Keycloak, Auth0).
+
+**5. HMAC Signature (Webhook Auth)**
+
+```php
+// Перевірка webhook від Stripe/GitHub:
+$signature = hash_hmac('sha256', $rawBody, $secret);
+$expected = 'sha256=' . $signature;
+
+if (!hash_equals($expected, $request->header('X-Hub-Signature-256'))) {
+    return response('Unauthorized', 401);
+}
+```
+
+---
+
+### Види API і проблеми на практиці
+
+**REST** — найпоширеніший. Проблеми:
+- Over-fetching / under-fetching: отримуєш більше або менше даних ніж потрібно
+- Versioning: болісно підтримувати `/v1`, `/v2` одночасно
+- Вирішення: GraphQL для under/over-fetching; feature flags або content negotiation для версій
+
+**GraphQL** — клієнт запитує саме ті поля які потрібні.
+- Проблеми: N+1 запити (вирішується DataLoader / batching); складна авторизація на рівні поля; важче кешувати
+- Вирішував N+1 через `graphql-php` + batch resolvers
+
+**gRPC** — бінарний протокол (Protocol Buffers), HTTP/2, bidirectional streaming.
+- Проблеми: складніше дебажити (не human-readable); потрібна підтримка HTTP/2 на всіх рівнях
+- Використовував для internal microservice комунікації де latency критична
+
+**WebSocket** — постійне з'єднання, real-time.
+- Проблеми: scaling (sticky sessions або pub/sub через Redis); reconnect logic на клієнті
+- Вирішував через Redis Pub/Sub + Ratchet/Pusher
+
+**Webhook (вхідні)** — зовнішній сервіс кличе нас.
+- Проблеми: retry storms (сервіс надсилає 1000 повторних запитів), ordering не гарантований
+- Вирішував: queue + idempotency key, повертати 200 одразу і обробляти асинхронно
+
+---
+
+### OWASP і його важливість для Senior PHP Developer
+
+**OWASP** (Open Web Application Security Project) — некомерційна організація, яка публікує стандарти, інструменти і документацію з безпеки веб-застосунків. Ключовий продукт — **OWASP Top 10**: список найкритичніших вразливостей.
+
+**Чому важливо для Senior:**
+- Senior відповідає за архітектурні рішення, які визначають security posture всієї системи
+- Code review — потрібно розпізнавати вразливості в чужому коді
+- Інцидент через SQL injection або XSS в production — репутаційні та фінансові втрати, які важко пояснити бізнесу
+- GDPR, PCI DSS, ISO 27001 — compliance вимагає знання OWASP як мінімальної планки
+
+---
+
+### Найважливіші вразливості для бекенду і захист від них
+
+**1. SQL Injection (A03:2021)**
+
+```php
+// Вразливо:
+$users = DB::select("SELECT * FROM users WHERE email = '{$email}'");
+// Атака: email = "' OR '1'='1" — виводить всіх
+
+// Захист: параметризовані запити (prepared statements)
+$users = DB::select('SELECT * FROM users WHERE email = ?', [$email]);
+
+// Або через ORM:
+User::where('email', $email)->first(); // автоматично безпечно
+```
+
+**2. Broken Authentication (A07:2021)**
+
+- Слабкі паролі, відсутність rate limiting на login
+- Зберігання паролів у plaintext або MD5
+
+```php
+// Погано:
+$hash = md5($password);
+
+// Добре:
+$hash = password_hash($password, PASSWORD_ARGON2ID);
+$valid = password_verify($input, $hash);
+```
+
+**3. Sensitive Data Exposure (A02:2021)**
+
+```php
+// Логи не повинні містити:
+Log::info('Payment processed', ['card' => $cardNumber]); // НЕБЕЗПЕЧНО
+
+// Маскування:
+Log::info('Payment processed', ['card_last4' => substr($cardNumber, -4)]);
+
+// .env файли не в git; secrets через Vault або AWS Secrets Manager
+// HTTPS everywhere; HSTS заголовки
+```
+
+**4. Broken Access Control (A01:2021) — #1 у 2021**
+
+```php
+// Вразливо: перевіряємо лише аутентифікацію, не авторизацію
+public function show(int $orderId): JsonResponse
+{
+    return Order::findOrFail($orderId)->toJson(); // будь-який авторизований user бачить чужі замовлення
+}
+
+// Захист: scope до поточного користувача
+public function show(int $orderId): JsonResponse
+{
+    $order = Order::where('user_id', auth()->id())->findOrFail($orderId);
+    return $order->toJson();
+}
+```
+
+**5. XSS — Cross-Site Scripting (A03:2021)**
+
+Для PHP API (JSON відповіді) XSS менш критичний ніж для HTML-рендерингу, але актуальний при генерації HTML або збереженні даних що потім рендеряться.
+
+```php
+// Захист при виводі в HTML (Blade):
+{{ $userInput }}       // автоматично htmlspecialchars
+{!! $userInput !!}    // RAW — тільки для довіреного контенту
+
+// Content-Type заголовок завжди explicit:
+return response()->json($data)
+    ->header('X-Content-Type-Options', 'nosniff');
+```
+
+**6. Security Misconfiguration (A05:2021)**
+
+```php
+// Відкрите середовище:
+APP_DEBUG=true // в production — виводить stack trace з чутливими даними
+
+// Правильно:
+APP_DEBUG=false // production
+// Відключити server tokens: expose_php = Off в php.ini
+// CORS: не * для API з аутентифікацією
+```
+
+**7. SSRF — Server-Side Request Forgery (A10:2021)**
+
+```php
+// Вразливо: API приймає URL і робить запит
+$response = Http::get($request->input('url'));
+// Атака: url=http://169.254.169.254/latest/meta-data/ (AWS metadata)
+
+// Захист: whitelist дозволених доменів або IP-фільтрація
+$url = $request->input('url');
+$host = parse_url($url, PHP_URL_HOST);
+if (!in_array($host, config('allowed_webhook_hosts'))) {
+    abort(400, 'Disallowed host');
+}
+// + фільтрувати private IP ranges (127.x, 10.x, 192.168.x)
+```
+
+**8. Mass Assignment**
+
+```php
+// Вразливо в Laravel:
+User::create($request->all()); // якщо є поле is_admin — користувач стане адміном
+
+// Захист: $fillable або $guarded
+class User extends Model
+{
+    protected $fillable = ['name', 'email', 'password']; // whitelist
+    // АБО
+    protected $guarded = ['is_admin', 'role']; // blacklist (ризикованіше)
+}
+```
+
+**9. Rate Limiting і Brute Force**
+
+```php
+// Laravel Throttle:
+Route::middleware('throttle:60,1')->group(function () { // 60 req/хв
+    Route::post('/login', [AuthController::class, 'login']);
+});
+
+// Для sensitive endpoints — жорсткіше:
+Route::middleware('throttle:5,1')->post('/forgot-password', ...);
+```
+
+**10. Dependency Vulnerabilities**
+
+```bash
+composer audit        # перевірка known vulnerabilities у залежностях
+# Або у CI/CD pipeline:
+composer audit --no-dev --format=json | jq '.advisories | length'
+```
+
+---
+
+**Практична checklist для code review з точки зору безпеки:**
+
+- [ ] Всі SQL через prepared statements або ORM
+- [ ] Перевірка belongs-to при кожній операції з чужим ресурсом
+- [ ] Чутливі дані не потрапляють у логи
+- [ ] Паролі через `password_hash(PASSWORD_ARGON2ID)`
+- [ ] Rate limiting на auth endpoints
+- [ ] `composer audit` у CI
+- [ ] `.env` не в git; `APP_DEBUG=false` в production
+- [ ] CORS налаштований точно (не `*` для authenticated API)
+- [ ] Content-Security-Policy та інші security headers через middleware
+
+#### Міні-шпаргалка
+
+- **REST** — архітектурний стиль: ресурси, HTTP-методи за призначенням, stateless, правильні статуси
+- **Stateless** — кожен запит самодостатній; дозволяє горизонтальне масштабування без sticky sessions
+- **Ідемпотентність** — GET, HEAD, PUT, DELETE; POST — ні; PATCH — залежить; для POST використовувати Idempotency-Key
+- **Авторизація** — API Key (сервіс-до-сервіс), JWT (stateless user auth), OAuth 2.0 (делегований доступ), HMAC (webhooks)
+- **OWASP Top 10** — мінімальний стандарт безпеки; A01 Broken Access Control, A02 Cryptographic Failures, A03 Injection
+- **Ключовий захист**: prepared statements, authorization scope, password_hash(ARGON2ID), rate limiting, input validation, composer audit
+
+</details>
+
+---
+
+<a id="105"></a>
+
+### 105. Що нового з'явилося в PHP 8.5?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+> PHP 8.5 заплановано на **листопад 2025**. На момент написання (mid-2025) більшість RFC вже прийнято і доступне в dev-гілці.
+
+---
+
+**1. Pipe оператор `|>`**
+
+Довгоочікувана можливість будувати ланцюжки трансформацій без вкладених викликів.
+
+```php
+// До:
+$result = array_sum(array_map('strlen', array_filter($words, 'strlen')));
+
+// Після:
+$result = $words
+    |> array_filter(...)
+    |> array_map(strlen(...), ...)
+    |> array_sum(...);
+```
+
+Правило: ліва частина підставляється як **перший аргумент** правої функції.
+
+---
+
+**2. `array_first()` і `array_last()`**
+
+Нарешті нативно — отримати перший/останній елемент масиву без `reset()` / `end()` або деструктуризації.
+
+```php
+$first = array_first([3, 1, 4, 1, 5]);  // 3
+$last  = array_last([3, 1, 4, 1, 5]);   // 5
+
+// З предикатом:
+$firstEven = array_first([1, 3, 4, 6], fn($v) => $v % 2 === 0); // 4
+```
+
+---
+
+**3. Нові функції для рядків**
+
+```php
+// Перевірка що рядок містить лише ASCII-символи:
+str_is_ascii('Hello');   // true
+str_is_ascii('Привіт'); // false
+
+// Підрахунок символів (grapheme-aware):
+grapheme_str_split('hello'); // ['h','e','l','l','o']
+```
+
+---
+
+**4. `Closure::fromCallable()` спрощення — `\Closure::bind` зі статичним контекстом**
+
+Дрібне, але помітне: `$fn = strlen(...)` вже в 8.1, але в 8.5 додано більше консистентності при передачі named arguments через pipe.
+
+---
+
+**5. Deprecations і чистки**
+
+- Остаточне видалення функцій, deprecated у 8.3/8.4:
+  - `lcg_value()` (замінено `Random\Engine`)
+  - `uniqid()` — не видалено, але додано попередження про ненадійність
+
+- Заборона динамічних властивостей у `stdClass` (підготовка до строгішої типізації)
+
+---
+
+**6. Покращення JIT**
+
+Розширено підтримку JIT-компіляції для більшої кількості opcode-паттернів, що дає приріст на math-heavy та string-processing навантаженнях (benchmark: до ~12% в окремих сценаріях).
+
+---
+
+**Контекст: еволюція PHP 8.x**
+
+| Версія | Ключові фічі |
+|---|---|
+| 8.0 (2020) | Named args, Match, Nullsafe `?->`, Union types, JIT |
+| 8.1 (2021) | Enums, Readonly props, Fibers, Intersection types, `never` |
+| 8.2 (2022) | Readonly classes, DNF types, `true`/`false`/`null` types |
+| 8.3 (2023) | Typed class constants, `#[Override]`, `json_validate()`, readonly deep clone |
+| 8.4 (2024) | Property hooks, Asymmetric visibility, `array_find/any/all`, Lazy objects, HTML5 parser |
+| 8.5 (2025) | Pipe `\|>`, `array_first/last`, str helpers, JIT покращення |
+
+#### Міні-шпаргалка
+
+- **Pipe `|>`** — ланцюжки трансформацій без вкладення; ліва частина → перший аргумент правої
+- **`array_first/last`** — нарешті без `reset()`/`end()`; підтримують предикат
+- **`str_is_ascii()`** — нативна перевірка ASCII
+- **JIT** — ширше покриття opcode, помітне на обчислювальних задачах
+- **Deprecations** — `lcg_value()` та інші legacy-функції прибираються
 
 </details>
 
