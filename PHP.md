@@ -57,6 +57,24 @@
 42. [У чому різниця між shallow clone і deep clone для об'єктів із вкладеними залежностями?](#42)
 43. [Що таке інтерфейс у PHP, що він може містити і коли інтерфейс доречніший за абстрактний клас?](#43)
 44. [Що таке абстрактний клас і в чому його відмінність від інтерфейсу?](#44)
+45. [Для чого в PHP використовується ключове слово final?](#45)
+46. [Що таке traits у PHP і які задачі вони вирішують?](#46)
+47. [Які проблеми можуть виникати при використанні traits і як вирішуються конфлікти імен?](#47)
+48. [Чи можна вкладати traits один в один і чи доступні private-методи trait у класі?](#48)
+49. [Як викликати або отримати доступ до private-властивості чи private-методу класу в runtime?](#49)
+50. [Що таке Reflection у PHP і де він може бути корисним на практиці?](#50)
+
+## Блок 5. Стандартна бібліотека, SPL та генератори
+
+51. [Що таке SPL у PHP і які її компоненти найчастіше корисні в реальній розробці?](#51)
+52. [Що таке генератори в PHP, як вони працюють і в яких випадках вони справді корисні?](#52)
+53. [Що таке замикання в PHP і як працює захоплення змінних у closure?](#53)
+54. [Як працює автозавантаження класів у PHP і яку роль у цьому відіграють SPL та Composer?](#54)
+
+## Блок 6. Архітектура та підходи до побудови застосунків
+
+55. [Що таке MVC, які проблеми виникають у класичному MVC в великих PHP-проєктах і як їх вирішують?](#55)
+56. [У чому різниця між Active Record і Data Mapper, і коли який підхід доречніше?](#56)
 
 ---
 
@@ -3998,6 +4016,1263 @@ abstract class AbstractGateway implements PaymentGateway
 - Інтерфейс: чистий контракт, без реалізації, множинна реалізація
 - Template Method — класичний патерн для abstract класу
 - Можна: `abstract class Foo implements Bar` — частково реалізувати інтерфейс
+
+</details>
+
+---
+
+<a id="45"></a>
+
+### 45. Для чого в PHP використовується ключове слово final?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+`final` забороняє розширення класу або перевизначення методу. Застосовується до класів і методів.
+
+**final клас — не можна успадкувати:**
+```php
+final class Money
+{
+    public function __construct(
+        public readonly int    $amount,
+        public readonly string $currency,
+    ) {}
+}
+
+class EuroMoney extends Money {} // Fatal error: Cannot extend final class Money
+```
+
+**final метод — не можна перевизначити в нащадку:**
+```php
+class BaseController
+{
+    final public function dispatch(Request $request): Response
+    {
+        // Критична логіка безпеки — нащадки не повинні ламати її
+        $this->authenticate($request);
+        return $this->handle($request);
+    }
+
+    protected function handle(Request $request): Response
+    {
+        return new Response();
+    }
+}
+
+class UserController extends BaseController
+{
+    public function dispatch(Request $request): Response {} // Fatal error
+    protected function handle(Request $request): Response { /* OK */ }
+}
+```
+
+**Коли використовувати `final`:**
+
+- **Value Objects** (`Money`, `DateRange`, `Email`) — незмінні, семантика не повинна змінюватися
+- **Критична інфраструктурна логіка** (security middleware, транзакції) — перевизначення небезпечне
+- **Явний сигнал** команді: "цей клас/метод не призначений для розширення"
+- **Допомагає статичному аналізу** — PHPStan/Psalm краще виводять типи для final класів
+
+**final + інтерфейс — нормальна практика:**
+```php
+final class StripeGateway implements PaymentGateway
+{
+    // Замість успадкування — реалізація контракту
+}
+```
+
+**Анти-патерн:** `final` на все підряд без причини ускладнює тестування (не можна зробити тест-дабл). Рішення — ін'єктувати залежності через інтерфейс.
+
+#### Міні-шпаргалка
+
+- `final class` — забороняє `extends`
+- `final` метод — забороняє `override` у нащадках
+- Використовувати для: Value Objects, security-критичних методів, незмінних контрактів
+- `final` + `implements` — нормально; `final` без причини — ускладнює мокінг
+
+</details>
+
+---
+
+<a id="46"></a>
+
+### 46. Що таке traits у PHP і які задачі вони вирішують?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Trait** — механізм повторного використання коду в мовах з одиночним наслідуванням. Це набір методів і властивостей, який можна "підмішати" в будь-який клас через `use`.
+
+**PHP має одиночне наслідування** — клас може мати тільки одного батька. Traits дозволяють виносити горизонтальну логіку без ієрархії.
+
+```php
+trait Timestamps
+{
+    private ?DateTimeImmutable $createdAt = null;
+    private ?DateTimeImmutable $updatedAt = null;
+
+    public function touch(): void
+    {
+        $now = new DateTimeImmutable();
+        $this->createdAt ??= $now;
+        $this->updatedAt   = $now;
+    }
+
+    public function getCreatedAt(): ?DateTimeImmutable
+    {
+        return $this->createdAt;
+    }
+}
+
+trait SoftDelete
+{
+    private ?DateTimeImmutable $deletedAt = null;
+
+    public function delete(): void
+    {
+        $this->deletedAt = new DateTimeImmutable();
+    }
+
+    public function isDeleted(): bool
+    {
+        return $this->deletedAt !== null;
+    }
+}
+
+class User
+{
+    use Timestamps, SoftDelete; // підключаємо обидва traits
+
+    public function __construct(public string $name) {}
+}
+
+$user = new User('Alice');
+$user->touch();
+$user->delete();
+echo $user->isDeleted(); // true
+```
+
+**Що може містити trait:**
+- Методи (public/protected/private)
+- Властивості
+- Абстрактні методи (нав'язує клас реалізувати)
+- Константи (PHP 8.2+)
+- `use` інших traits
+
+**Типові задачі traits:**
+
+| Задача | Приклад trait |
+|---|---|
+| Cross-cutting concerns | Logging, Timestamps, SoftDelete |
+| Reusable поведінка без ієрархії | Serializable, Comparable |
+| Mixin-поведінка для різних ієрархій | HasUuid, HasSlug |
+| Тестові helper-методи | MockeryAssertions |
+
+**Абстрактний метод у trait** — примушує клас реалізувати метод:
+```php
+trait Validatable
+{
+    abstract protected function rules(): array;
+
+    public function validate(array $data): bool
+    {
+        foreach ($this->rules() as $field => $rule) {
+            // ...
+        }
+        return true;
+    }
+}
+
+class CreateUserRequest
+{
+    use Validatable;
+
+    protected function rules(): array
+    {
+        return ['name' => 'required', 'email' => 'email'];
+    }
+}
+```
+
+#### Міні-шпаргалка
+
+- Trait = горизонтальне перевикористання коду без наслідування
+- `use TraitA, TraitB;` — підключення в клас
+- Може містити: методи, властивості, abstract методи, константи (8.2+)
+- Не можна інстанціювати trait напряму
+- Підходить для: logging, timestamps, soft delete, UUID, slug
+
+</details>
+
+---
+
+<a id="47"></a>
+
+### 47. Які проблеми можуть виникати при використанні traits і як вирішуються конфлікти імен?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Конфлікт імен** — два traits мають метод з однаковою назвою. PHP не знає, який використати → Fatal error.
+
+```php
+trait A
+{
+    public function hello(): string { return 'Hello from A'; }
+}
+
+trait B
+{
+    public function hello(): string { return 'Hello from B'; }
+}
+
+class Foo
+{
+    use A, B; // Fatal: Trait method hello has not been applied
+}
+```
+
+**Вирішення: `insteadof` та `as`:**
+
+```php
+class Foo
+{
+    use A, B {
+        A::hello insteadof B; // використовувати A::hello замість B::hello
+        B::hello as helloFromB; // B::hello доступний під псевдонімом
+    }
+}
+
+$foo = new Foo();
+echo $foo->hello();        // 'Hello from A'
+echo $foo->helloFromB();   // 'Hello from B'
+```
+
+**`as` також змінює видимість:**
+```php
+trait Logger
+{
+    public function log(string $msg): void { /* ... */ }
+}
+
+class Service
+{
+    use Logger {
+        log as private; // приховуємо публічний метод trait
+    }
+}
+
+$s = new Service();
+$s->log('test'); // Fatal: Call to private method
+```
+
+**Конфлікт властивостей** — якщо два traits оголошують властивість з однаковою назвою і різним типом/значенням → Fatal error. Розв'язати через `insteadof` не можна — треба переіменувати в одному з traits або не оголошувати властивість в trait взагалі (краще оголошувати в класі).
+
+**Клас завжди перемагає trait:**
+```php
+trait Greeter
+{
+    public function hello(): string { return 'Trait hello'; }
+}
+
+class MyClass
+{
+    use Greeter;
+
+    public function hello(): string { return 'Class hello'; } // перемагає
+}
+
+echo (new MyClass())->hello(); // 'Class hello'
+```
+
+**Порядок пріоритету:** Клас > Trait > батьківський клас.
+
+**Інші проблеми traits:**
+- **Неявні залежності** — trait звертається до `$this->db`, але клас може не мати такої властивості; виявляється тільки в рантаймі
+- **Важко тестувати ізольовано** — trait без класу не виконується
+- **Приховує складність** — клас виглядає простим, але `use` тягне 300 рядків логіки
+- **Порушення SRP** — клас з 5 traits часто має занадто багато відповідальностей
+
+#### Міні-шпаргалка
+
+- Конфлікт методів → `TraitA::method insteadof TraitB` + `TraitB::method as alias`
+- `as private/protected` — змінює видимість методу trait
+- Клас перемагає trait; trait перемагає батьківський клас
+- Конфлікт властивостей — не вирішується `insteadof`, треба рефакторинг
+- Ризики: неявні залежності на `$this`, важко тестувати, прихована складність
+
+</details>
+
+---
+
+<a id="48"></a>
+
+### 48. Чи можна вкладати traits один в один і чи доступні private-методи trait у класі?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Так, trait може використовувати інший trait** через `use` всередині самого trait:
+
+```php
+trait Loggable
+{
+    public function log(string $msg): void
+    {
+        echo "[LOG] $msg\n";
+    }
+}
+
+trait Auditable
+{
+    use Loggable; // trait вкладає інший trait
+
+    public function audit(string $action): void
+    {
+        $this->log("Audit: $action"); // використовує метод з Loggable
+    }
+}
+
+class UserService
+{
+    use Auditable; // отримує і audit(), і log()
+}
+
+$s = new UserService();
+$s->audit('user.created'); // [LOG] Audit: user.created
+$s->log('direct call');    // [LOG] direct call — теж доступний
+```
+
+Клас `UserService` отримує **всі методи** з усього ланцюжка traits — і `audit()`, і `log()`.
+
+**Private методи trait — повністю доступні в класі:**
+
+```php
+trait HashPassword
+{
+    private function hash(string $password): string
+    {
+        return password_hash($password, PASSWORD_BCRYPT);
+    }
+
+    public function setPassword(string $plain): void
+    {
+        $this->passwordHash = $this->hash($plain); // private метод trait
+    }
+}
+
+class User
+{
+    use HashPassword;
+
+    private string $passwordHash = '';
+}
+
+$user = new User();
+$user->setPassword('secret');  // OK — викликає private hash() через public setPassword()
+// $user->hash('x');           // Fatal: Call to private method — недоступний ззовні
+```
+
+Private методи trait стають **private методами класу** — доступні всередині класу/trait, але не ззовні.
+
+**Protected методи trait** — стають protected методами класу, доступні в нащадках.
+
+**Важливий нюанс: private метод trait і клас-нащадок:**
+```php
+trait T
+{
+    private function secret(): string { return 'trait'; }
+    public function reveal(): string  { return $this->secret(); }
+}
+
+class Parent_
+{
+    use T;
+}
+
+class Child extends Parent_
+{
+    // secret() — private, не успадковується; child не може override
+    // reveal() — public, успадковується нормально
+}
+
+echo (new Child())->reveal(); // 'trait' — працює, т.к. метод визначений у Parent_
+```
+
+#### Міні-шпаргалка
+
+- Trait може містити `use AnotherTrait` — вкладення підтримується
+- Клас отримує методи всього ланцюжка вкладених traits
+- `private` методи trait → private методи класу; доступні всередині, але не ззовні
+- `protected` методи trait → protected методи класу; доступні в нащадках
+- Конфлікти при вкладених traits вирішуються так само: `insteadof` + `as`
+
+</details>
+
+---
+
+<a id="49"></a>
+
+### 49. Як викликати або отримати доступ до private-властивості чи private-методу класу в runtime?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Є три основні способи обійти обмеження видимості в runtime:
+
+**1. ReflectionClass / ReflectionProperty / ReflectionMethod**
+
+```php
+class BankAccount
+{
+    private float $balance = 1000.0;
+
+    private function calculateInterest(float $rate): float
+    {
+        return $this->balance * $rate;
+    }
+}
+
+$obj = new BankAccount();
+
+// Доступ до private властивості
+$prop = new ReflectionProperty(BankAccount::class, 'balance');
+$prop->setAccessible(true);       // знімаємо обмеження
+echo $prop->getValue($obj);       // 1000.0
+$prop->setValue($obj, 2000.0);    // змінюємо значення
+
+// Виклик private методу
+$method = new ReflectionMethod(BankAccount::class, 'calculateInterest');
+$method->setAccessible(true);
+echo $method->invoke($obj, 0.05); // 100.0
+```
+
+> PHP 8.1+: `setAccessible(true)` більше не потрібен — Reflection сам надає доступ.
+
+**2. Closure::bind / bindTo — прив'язка closure до контексту класу**
+
+```php
+$getBalance = Closure::bind(
+    fn() => $this->balance,   // $this тут — об'єкт BankAccount
+    $obj,                     // конкретний екземпляр
+    BankAccount::class        // клас, в контексті якого виконується
+);
+
+echo $getBalance(); // 1000.0
+
+// Або через bindTo на об'єкті
+$setter = (function(float $value) {
+    $this->balance = $value;
+})->bindTo($obj, BankAccount::class);
+
+$setter(5000.0);
+```
+
+**3. Closure::fromCallable + call (PHP 7+)**
+
+```php
+$result = (function() {
+    return $this->balance;
+})->call($obj); // прив'язує $this = $obj з контекстом BankAccount
+
+echo $result; // 1000.0 (або 5000.0 після попереднього прикладу)
+```
+
+**Коли це реально використовується:**
+
+- **Юніт-тести** — перевірити внутрішній стан без геттерів (замість додавання `getBalance()` тільки для тестів)
+- **DI-контейнери** — впровадити залежності в private властивості (`Symfony`, `Laravel` так роблять при autowiring)
+- **ORM/серіалізація** — Doctrine заповнює private поля entity з БД без конструктора
+- **Фреймворкова магія** — `@inject`, `#[Inject]` анотації
+
+**Порядок пріоритету за зручністю:**
+
+```
+Closure::call()  →  найлаконічніший для одноразових операцій
+ReflectionClass  →  найпотужніший, підходить для інтроспекції структури
+Closure::bind    →  гнучкий, якщо треба зберегти closure для повторного використання
+```
+
+#### Міні-шпаргалка
+
+- `ReflectionProperty::setAccessible(true)` + `getValue/setValue` — читання/запис private поля
+- `ReflectionMethod::setAccessible(true)` + `invoke($obj, ...)` — виклик private методу
+- PHP 8.1+: `setAccessible` не потрібен
+- `Closure::bind(fn, $obj, ClassName)` — closure з доступом до private через `$this`
+- `(fn() => $this->prop)->call($obj)` — найкоротший варіант
+- Використовують: тести, DI-контейнери, ORM, серіалізація
+
+</details>
+
+---
+
+<a id="50"></a>
+
+### 50. Що таке Reflection у PHP і де він може бути корисним на практиці?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Reflection API** — набір вбудованих класів PHP для інтроспекції коду в runtime: отримання інформації про класи, методи, властивості, параметри, атрибути — без виконання коду.
+
+**Основні класи:**
+
+| Клас | Для чого |
+|---|---|
+| `ReflectionClass` | Інформація про клас: методи, властивості, батьки, інтерфейси |
+| `ReflectionMethod` | Параметри методу, видимість, abstract/static, виклик |
+| `ReflectionProperty` | Тип, значення, visibility властивості |
+| `ReflectionParameter` | Тип, дефолт, nullable, variadic параметра |
+| `ReflectionFunction` | Те саме для вільних функцій |
+| `ReflectionAttribute` | PHP 8.0+: читання атрибутів (`#[...]`) |
+
+**Базовий приклад — інтроспекція класу:**
+```php
+class UserService
+{
+    public function __construct(
+        private UserRepository $repo,
+        private EventDispatcher $events,
+    ) {}
+
+    public function create(string $name, string $email): User { /* ... */ }
+}
+
+$rc = new ReflectionClass(UserService::class);
+
+// Список публічних методів
+foreach ($rc->getMethods(ReflectionMethod::IS_PUBLIC) as $m) {
+    echo $m->getName() . "\n"; // __construct, create
+}
+
+// Параметри конструктора — так DI-контейнер знає що впроваджувати
+$constructor = $rc->getConstructor();
+foreach ($constructor->getParameters() as $param) {
+    $type = $param->getType()->getName();
+    echo "{$param->getName()}: $type\n";
+    // repo: UserRepository
+    // events: EventDispatcher
+}
+```
+
+**Практичні застосування:**
+
+**DI-контейнер (autowiring):**
+```php
+function make(string $class): object
+{
+    $rc = new ReflectionClass($class);
+    $params = $rc->getConstructor()?->getParameters() ?? [];
+
+    $deps = array_map(
+        fn($p) => make($p->getType()->getName()), // рекурсивно резолвимо
+        $params
+    );
+
+    return $rc->newInstanceArgs($deps);
+}
+
+$service = make(UserService::class);
+// Автоматично створює UserRepository та EventDispatcher
+```
+
+**Читання PHP 8 атрибутів (Route, Inject, Validate...):**
+```php
+#[Attribute]
+class Route
+{
+    public function __construct(public string $path) {}
+}
+
+class UserController
+{
+    #[Route('/users')]
+    public function index(): Response { /* ... */ }
+}
+
+$rc = new ReflectionClass(UserController::class);
+$method = $rc->getMethod('index');
+$attrs  = $method->getAttributes(Route::class);
+
+foreach ($attrs as $attr) {
+    $route = $attr->newInstance(); // Route { path: '/users' }
+    echo $route->path; // '/users'
+}
+```
+
+**Серіалізація / ORM (Doctrine, Cycle):**
+```php
+// Doctrine заповнює private поля entity без конструктора:
+$entity = $rc->newInstanceWithoutConstructor();
+foreach ($rc->getProperties() as $prop) {
+    $prop->setAccessible(true);
+    $prop->setValue($entity, $dataFromDb[$prop->getName()]);
+}
+```
+
+**Тестування:**
+```php
+// Перевірити внутрішній стан об'єкта
+$prop = new ReflectionProperty($service, 'callCount');
+$prop->setAccessible(true);
+assertSame(3, $prop->getValue($service));
+```
+
+**Вартість Reflection:**
+Reflection дорожчий за прямий виклик методу (~5–10x). У DI-контейнерах результати **кешуються** після першого запиту — у рантаймі на кожен `make()` Reflection не викликається повторно.
+
+#### Міні-шпаргалка
+
+- Reflection = інтроспекція структури класів/методів/параметрів у runtime
+- `ReflectionClass` → методи, властивості, конструктор, інтерфейси
+- `ReflectionParameter` → типи параметрів (основа autowiring у DI)
+- `ReflectionAttribute` → читання `#[Attr]` атрибутів PHP 8
+- Застосування: DI-контейнери, ORM, роутери, тести, code generation
+- Дорого — кешувати після першого аналізу
+
+</details>
+
+---
+
+<a id="51"></a>
+
+### 51. Що таке SPL у PHP і які її компоненти найчастіше корисні в реальній розробці?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**SPL (Standard PHP Library)** — вбудована бібліотека PHP з готовими структурами даних, ітераторами, інтерфейсами та утилітами. Не вимагає установки.
+
+**Структури даних (вже розглядалися в Q21, нагадування):**
+
+```php
+$stack = new SplStack();       // LIFO, push/pop
+$queue = new SplQueue();       // FIFO, enqueue/dequeue
+$heap  = new SplMinHeap();     // мінімальна купа, insert/extract
+$pq    = new SplPriorityQueue(); // черга з пріоритетом
+$map   = new SplObjectStorage(); // хешмапа об'єкт → дані
+```
+
+**SplObjectStorage** — особливо корисний: зберігає об'єкти як ключі:
+```php
+$storage = new SplObjectStorage();
+$storage->attach($userA, ['role' => 'admin']);
+$storage->attach($userB, ['role' => 'viewer']);
+
+echo $storage->contains($userA); // true
+echo $storage[$userA]['role'];    // 'admin'
+$storage->detach($userA);
+```
+
+**Ітератори — обхід без завантаження всього в пам'ять:**
+```php
+// DirectoryIterator — файли в директорії
+foreach (new DirectoryIterator('/var/logs') as $file) {
+    if ($file->isFile()) echo $file->getFilename() . "\n";
+}
+
+// RecursiveDirectoryIterator + RecursiveIteratorIterator — рекурсивно
+$dir  = new RecursiveDirectoryIterator('/var/app');
+$iter = new RecursiveIteratorIterator($dir);
+foreach ($iter as $file) {
+    echo $file->getPathname() . "\n";
+}
+
+// FilesystemIterator з фільтром
+$files = new FilesystemIterator('/uploads', FilesystemIterator::SKIP_DOTS);
+```
+
+**ArrayObject — масив з ООП-інтерфейсом:**
+```php
+$ao = new ArrayObject(['a' => 1, 'b' => 2]);
+$ao->append(3);
+$ao->offsetSet('c', 4);
+$iter = $ao->getArrayCopy(); // назад у масив
+```
+
+**SplFileObject — робота з файлами рядок за рядком:**
+```php
+$file = new SplFileObject('/data/import.csv');
+$file->setFlags(SplFileObject::READ_CSV);
+foreach ($file as $row) {
+    // $row — масив полів CSV, рядок за рядком без завантаження всього файлу
+}
+```
+
+**Інтерфейси SPL** (реалізуєш у своїх класах):
+
+| Інтерфейс | Що дає |
+|---|---|
+| `Countable` | `count($obj)` — викликає `count()` методу |
+| `ArrayAccess` | `$obj['key']` — доступ як до масиву |
+| `Iterator` | `foreach ($obj)` — власний обхід |
+| `IteratorAggregate` | `getIterator()` — делегувати ітерацію |
+| `Serializable` | `serialize`/`unserialize` (застаріло на користь `__serialize`) |
+
+```php
+class Config implements ArrayAccess, Countable
+{
+    private array $data = [];
+
+    public function offsetGet(mixed $key): mixed    { return $this->data[$key]; }
+    public function offsetSet(mixed $key, mixed $v): void { $this->data[$key] = $v; }
+    public function offsetExists(mixed $key): bool  { return isset($this->data[$key]); }
+    public function offsetUnset(mixed $key): void   { unset($this->data[$key]); }
+    public function count(): int                    { return count($this->data); }
+}
+
+$cfg = new Config();
+$cfg['db'] = 'mysql';
+echo count($cfg); // 1
+```
+
+#### Міні-шпаргалка
+
+- SPL = вбудовані структури даних + ітератори + інтерфейси
+- `SplStack/Queue/MinHeap/PriorityQueue` — типізовані структури
+- `SplObjectStorage` — хешмапа де ключ = об'єкт
+- `DirectoryIterator / RecursiveDirectoryIterator` — обхід файлів
+- `SplFileObject` — CSV/файл рядок за рядком без завантаження в пам'ять
+- Інтерфейси: `Countable`, `ArrayAccess`, `Iterator`, `IteratorAggregate`
+
+</details>
+
+---
+
+<a id="52"></a>
+
+### 52. Що таке генератори в PHP, як вони працюють і в яких випадках вони справді корисні?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Генератор** — функція, яка використовує `yield` замість `return`. При виклику вона не виконується одразу, а повертає об'єкт `Generator`. Значення віддаються по одному при кожній ітерації, стан функції зберігається між викликами.
+
+```php
+function fibonacci(): Generator
+{
+    [$a, $b] = [0, 1];
+    while (true) {          // нескінченна послідовність
+        yield $a;           // повертає значення, призупиняє виконання
+        [$a, $b] = [$b, $a + $b];
+    }
+}
+
+$fib = fibonacci();
+for ($i = 0; $i < 8; $i++) {
+    echo $fib->current() . ' '; // 0 1 1 2 3 5 8 13
+    $fib->next();
+}
+```
+
+**Як працює:** `yield` призупиняє функцію і повертає значення зовні. При наступному `next()` / `foreach` виконання відновлюється з того ж місця. Стан локальних змінних збережено.
+
+**yield з ключем:**
+```php
+function indexedData(): Generator
+{
+    yield 'first'  => 100;
+    yield 'second' => 200;
+}
+
+foreach (indexedData() as $key => $value) {
+    echo "$key: $value\n"; // first: 100, second: 200
+}
+```
+
+**yield from — делегування іншому генератору або масиву:**
+```php
+function inner(): Generator
+{
+    yield 1;
+    yield 2;
+}
+
+function outer(): Generator
+{
+    yield 0;
+    yield from inner();   // делегує inner
+    yield from [3, 4, 5]; // можна і масив
+}
+
+// 0 1 2 3 4 5
+```
+
+**Коли генератори справді корисні:**
+
+**1. Обробка великих файлів / БД без завантаження в пам'ять:**
+```php
+function readCsvLazy(string $path): Generator
+{
+    $fh = fopen($path, 'r');
+    while (($row = fgetcsv($fh)) !== false) {
+        yield $row; // рядок за рядком, ~constant memory
+    }
+    fclose($fh);
+}
+
+foreach (readCsvLazy('/data/10gb.csv') as $row) {
+    processRow($row); // пам'ять = один рядок, не весь файл
+}
+```
+
+**2. Pipeline обробки даних (lazy pipeline):**
+```php
+function filter(Generator $src, callable $fn): Generator
+{
+    foreach ($src as $item) {
+        if ($fn($item)) yield $item;
+    }
+}
+
+function map(Generator $src, callable $fn): Generator
+{
+    foreach ($src as $item) {
+        yield $fn($item);
+    }
+}
+
+$rows    = readCsvLazy('users.csv');
+$active  = filter($rows, fn($r) => $r['status'] === 'active');
+$emails  = map($active, fn($r) => $r['email']);
+
+foreach ($emails as $email) {
+    sendEmail($email); // обробка по одному, без масивів у пам'яті
+}
+```
+
+**3. Двонаправлена комунікація через send():**
+```php
+function accumulator(): Generator
+{
+    $total = 0;
+    while (true) {
+        $value = yield $total; // yield повертає назовні, send() передає значення всередину
+        if ($value === null) return;
+        $total += $value;
+    }
+}
+
+$gen = accumulator();
+$gen->current();      // ініціалізуємо генератор
+$gen->send(10);       // total = 10
+$gen->send(20);       // total = 30
+echo $gen->send(5);   // 35
+```
+
+**Порівняння з масивом:**
+
+| | Масив | Генератор |
+|---|---|---|
+| Пам'ять | Вся колекція | О(1) — один елемент |
+| Перемотка | Так | Ні (тільки вперед) |
+| Нескінченні послідовності | Ні | Так |
+| Lazy evaluation | Ні | Так |
+
+#### Міні-шпаргалка
+
+- Генератор = функція з `yield`; повертає `Generator` об'єкт
+- При `yield` функція призупиняється, стан зберігається
+- `yield $key => $value` — ключ + значення
+- `yield from` — делегування іншому генератору або масиву
+- `$gen->send($value)` — передати значення всередину генератора
+- Використовують: великі файли/БД, lazy pipeline, нескінченні послідовності
+
+</details>
+
+---
+
+<a id="53"></a>
+
+### 53. Що таке замикання в PHP і як працює захоплення змінних у closure?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Closure (замикання)** — анонімна функція, яка може захоплювати змінні з зовнішнього scope через `use`. В PHP це об'єкт класу `Closure`.
+
+```php
+$multiplier = 3;
+
+$triple = function(int $n) use ($multiplier): int {
+    return $n * $multiplier;
+};
+
+echo $triple(5); // 15
+```
+
+**Два режими захоплення:**
+
+**1. За значенням (за замовчуванням)** — копія на момент створення closure:
+```php
+$value = 10;
+$fn = function() use ($value) { return $value; };
+
+$value = 99; // змінюємо після створення
+echo $fn();  // 10 — захопила копію, не відстежує зміни
+```
+
+**2. За посиланням (`use (&$var)`)** — посилання на змінну:
+```php
+$counter = 0;
+$increment = function() use (&$counter) { $counter++; };
+
+$increment();
+$increment();
+echo $counter; // 2 — closure змінює оригінальну змінну
+```
+
+**Arrow function (`fn`) — автоматичне захоплення за значенням:**
+```php
+$factor = 4;
+$multiply = fn(int $n) => $n * $factor; // захоплює $factor автоматично (by value)
+
+echo $multiply(5); // 20
+
+// Вкладені arrow functions теж захоплюють автоматично
+$adder = fn($x) => fn($y) => $x + $y; // currying
+echo $adder(3)(4); // 7
+```
+
+**Closure як об'єкт — можна зберігати, передавати, викликати:**
+```php
+class EventEmitter
+{
+    private array $listeners = [];
+
+    public function on(string $event, Closure $handler): void
+    {
+        $this->listeners[$event][] = $handler;
+    }
+
+    public function emit(string $event, mixed $payload): void
+    {
+        foreach ($this->listeners[$event] ?? [] as $fn) {
+            $fn($payload);
+        }
+    }
+}
+
+$logger = new Logger();
+$emitter = new EventEmitter();
+
+$emitter->on('user.created', function(User $user) use ($logger) {
+    $logger->info("New user: {$user->email}");
+});
+```
+
+**$this в closure** — автоматично доступний якщо closure оголошена всередині методу класу:
+```php
+class OrderProcessor
+{
+    private float $taxRate = 0.2;
+
+    public function getCalculator(): Closure
+    {
+        return function(float $amount): float {
+            return $amount * (1 + $this->taxRate); // $this — OrderProcessor
+        };
+    }
+}
+
+$calc = (new OrderProcessor())->getCalculator();
+echo $calc(100); // 120.0
+```
+
+**Closure::bind / bindTo** — прив'язати closure до іншого об'єкта (розглянуто в Q49).
+
+**Типові застосування:**
+- Callbacks: `array_map`, `array_filter`, `usort`
+- Event listeners
+- Middleware pipeline (Slim, Laravel)
+- Lazy initializers
+- Partial application / currying
+
+#### Міні-шпаргалка
+
+- Closure = анонімна функція; є об'єктом класу `Closure`
+- `use ($var)` — захоплення за значенням (копія на момент створення)
+- `use (&$var)` — захоплення за посиланням (відстежує зміни)
+- `fn($x) => expr` — arrow function, захоплює по value автоматично
+- `$this` всередині closure в методі — автоматично прив'язаний
+- `Closure::bind($fn, $obj, Class)` — прив'язати до іншого контексту
+
+</details>
+
+---
+
+<a id="54"></a>
+
+### 54. Як працює автозавантаження класів у PHP і яку роль у цьому відіграють SPL та Composer?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**Автозавантаження** — механізм автоматичного підключення файлу з класом у момент першого звернення до класу, без явних `require`/`include`.
+
+**Базовий механізм — `spl_autoload_register`:**
+```php
+spl_autoload_register(function(string $class): void {
+    // $class = 'App\Service\UserService'
+    $path = __DIR__ . '/' . str_replace('\\', '/', $class) . '.php';
+    if (file_exists($path)) {
+        require $path;
+    }
+});
+
+// Тепер можна:
+$user = new App\Service\UserService(); // PHP викличе autoloader автоматично
+```
+
+**SPL autoload stack** — можна зареєструвати кілька завантажувачів, вони викликаються по черзі:
+```php
+spl_autoload_register($loaderA);
+spl_autoload_register($loaderB);
+// При new Foo: спочатку $loaderA, якщо не знайшов — $loaderB
+```
+
+**PSR-4 — стандарт маппінгу namespace → шлях:**
+
+Правило: `VendorName\Package\ClassName` → `src/Package/ClassName.php`
+
+```
+Namespace prefix: App\
+Base directory:   src/
+
+App\Service\UserService  →  src/Service/UserService.php
+App\Model\Order          →  src/Model/Order.php
+```
+
+**Composer autoloader — промисловий стандарт:**
+
+`composer.json`:
+```json
+{
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}
+```
+
+```bash
+composer dump-autoload        # генерує vendor/autoload.php
+composer dump-autoload -o     # оптимізований (classmap для продакшну)
+```
+
+```php
+require __DIR__ . '/vendor/autoload.php'; // одне підключення на весь проект
+// Далі всі класи App\ завантажуються автоматично
+```
+
+**Що генерує Composer:**
+
+- `vendor/composer/autoload_psr4.php` — PSR-4 маппінги
+- `vendor/composer/autoload_classmap.php` — повна карта клас→файл (при `-o`)
+- `vendor/composer/autoload_files.php` — файли для автоматичного include (helpers)
+
+**Оптимізований classmap для продакшну:**
+```bash
+composer dump-autoload --optimize
+# або
+composer install --optimize-autoloader
+```
+Замість пошуку файлу за PSR-4 правилом — пряме звернення до масиву `class → file`. Швидше на ~30–40% при великій кількості класів.
+
+**Декілька namespace у одному проекті:**
+```json
+{
+    "autoload": {
+        "psr-4": {
+            "App\\":   "src/",
+            "Tests\\": "tests/"
+        },
+        "files": ["src/helpers.php"]
+    }
+}
+```
+
+**Ланцюжок при `new App\Service\UserService()`:**
+1. PHP не знає цей клас → шукає в autoload stack
+2. Composer autoloader отримує `App\Service\UserService`
+3. Знаходить prefix `App\` → base dir `src/`
+4. Будує шлях: `src/Service/UserService.php`
+5. `require` файлу → клас доступний
+
+#### Міні-шпаргалка
+
+- `spl_autoload_register($fn)` — реєструє функцію-завантажувач
+- Кілька завантажувачів утворюють стек; викликаються по черзі
+- PSR-4: namespace prefix → base directory → шлях до файлу
+- Composer: `"psr-4": {"App\\": "src/"}` + `require vendor/autoload.php`
+- `composer dump-autoload -o` — classmap для продакшну, швидший пошук
+- `"files": [...]` — завжди підключати (helpers, глобальні функції)
+
+</details>
+
+---
+
+<a id="55"></a>
+
+### 55. Що таке MVC, які проблеми виникають у класичному MVC в великих PHP-проєктах і як їх вирішують?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+**MVC (Model–View–Controller)** — архітектурний патерн, що розділяє застосунок на три шари відповідальності:
+
+- **Model** — дані та бізнес-логіка. Знає про структуру даних, правила валідації, взаємодію з базою даних.
+- **View** — презентація. Отримує дані від Controller і формує відповідь (HTML, JSON).
+- **Controller** — оркестратор. Приймає HTTP-запит, викликає Model, передає результат у View.
+
+Класична ідея: Controller тонкий, Model містить логіку, View — тільки відображення. На практиці в PHP-фреймворках (Laravel, Symfony, Yii) MVC реалізується по-різному, але загальна схема однакова.
+
+---
+
+**Проблеми класичного MVC при зростанні проєкту:**
+
+**1. Fat Model ("Товста модель")**
+Коли весь бізнес-логіки зосереджено в Model, вона перетворюється на клас з тисячами рядків: тут і SQL-запити, і розсилка email, і розрахунки, і валідація. Такий клас важко тестувати — він залежить від БД, поштового сервісу, черги одночасно. Laravel-спільнота часто стикається з цим у `Eloquent`-моделях.
+
+**2. Fat Controller ("Товстий контролер")**
+Зворотна крайність — вся бізнес-логіка в контролері. Контролер починає містити SQL, умовну логіку, розсилки. Результат: контролер неможливо протестувати без HTTP-запиту, логіку неможливо перевикористати.
+
+**3. Відсутність шару бізнес-логіки**
+Класичний MVC не описує, де жити use case-логіці. "Створити замовлення, перевірити баланс, зарезервувати товар, надіслати підтвердження" — це не Model і не Controller, це окрема операція. В MVC немає чіткого місця для неї.
+
+**4. Пряма залежність Controller → Model**
+Контролер звертається напряму до конкретного класу моделі. Підмінити реалізацію для тестів без DI-контейнера складно. Фреймворки зі статичними фасадами (Laravel) ще більше ускладнюють ізоляцію.
+
+**5. View розростається у Template Spaghetti**
+Шаблони починають містити умовну логіку, запити до БД через передані об'єкти, форматування дат. Межа між View і Controller/Model розмивається.
+
+---
+
+**Як вирішують:**
+
+**Service Layer (Application Services / Use Cases)**
+Між Controller і Model вводять шар сервісів. Контролер стає тонким: він десеріалізує запит, викликає сервіс, повертає відповідь. Уся бізнес-логіка — в сервісі, який не залежить від HTTP. Це дає можливість викликати ту саму логіку з CLI, черги, або тесту без HTTP-контексту.
+
+**Repository Pattern**
+Замість прямого звернення до ORM/БД з Model чи Controller — Repository-інтерфейс. Controller і Service залежать від абстракції `UserRepositoryInterface`, а не від конкретного Eloquent/Doctrine класу. Це дозволяє підмінити реалізацію в тестах або змінити ORM без зміни логіки.
+
+**DTO (Data Transfer Objects)**
+Замість передачі сирого масиву `$request->all()` між шарами — типізований об'єкт `CreateOrderDto`. Це документує контракт, дає автодоповнення в IDE, виявляє помилки на рівні статичного аналізу.
+
+**Event-driven підхід**
+Замість того, щоб сервіс явно викликати email/push/лог після операції — він кидає доменну подію `OrderCreated`. Listener-и реагують незалежно. Controller залишається незмінним при додаванні нових реакцій на подію.
+
+**CQRS (Command Query Responsibility Segregation)**
+Запити на читання (`Query`) та запити на зміну (`Command`) розділяють в окремі стеки. Це вирішує проблему, коли одна Model обслуговує і складні аналітичні читання, і транзакційні записи з різними правилами.
+
+**Підсумок:** класичний MVC добре підходить для невеликих застосунків. При зростанні проєкту додають Service Layer + Repository + DTO, а в найскладніших доменах — DDD, CQRS або Clean Architecture.
+
+#### Міні-шпаргалка
+
+- MVC: Controller (HTTP) → Model (дані/логіка) → View (відображення)
+- Проблеми: Fat Model, Fat Controller, немає місця для use case-логіки
+- Рішення: Service Layer — бізнес-логіка поза MVC, не залежить від HTTP
+- Repository — ізоляція від конкретного ORM; підмінюється в тестах
+- DTO — типізована передача даних між шарами
+- Events — decoupled реакції на доменні події
+- CQRS — окремі стеки для читання і запису
+
+</details>
+
+---
+
+<a id="56"></a>
+
+### 56. У чому різниця між Active Record і Data Mapper, і коли який підхід доречніше?
+
+<details>
+<summary>Розкрити:</summary>
+
+#### Відповідь
+
+Це два принципово різних способи організувати зв'язок між об'єктами в коді та таблицями в базі даних.
+
+---
+
+**Active Record**
+
+Об'єкт знає про своє збереження сам. Model містить і дані, і логіку роботи з БД — методи `save()`, `delete()`, `find()`, `where()` є безпосередньо на об'єкті або його класі.
+
+Класичний приклад — `Eloquent` (Laravel). Щоб зберегти запис, ти просто викликаєш `$user->save()`. Щоб отримати — `User::where('email', $email)->first()`. Model знає про таблицю, column-маппінг, стосунки.
+
+**Переваги Active Record:**
+- Дуже швидкий старт. Мінімум boilerplate: оголосив клас, розширив базовий — і вже можна писати в БД.
+- Інтуїтивно: "об'єкт і є рядком у таблиці", концептуально просто.
+- Добре підходить для CRUD-застосунків з простою доменною логікою: блог, адмінка, API над таблицями.
+- Широка підтримка в PHP: Eloquent, Yii ActiveRecord, Propel.
+
+**Недоліки Active Record:**
+- Порушує SRP: один клас відповідає і за бізнес-логіку, і за персистентність. Протестувати клас без БД практично неможливо — `save()` вимагає з'єднання.
+- При складній доменній логіці Model розпухає: там і скоупи, і стосунки, і мутатори, і бізнес-правила.
+- Важко відділити доменну модель від схеми БД. Зміна структури таблиці = зміна класу.
+- Ускладнює роботу зі складними агрегатами, коли один об'єкт складається з кількох таблиць.
+
+---
+
+**Data Mapper**
+
+Об'єкт нічого не знає про БД. Є два незалежних шари: доменна модель (pure PHP object) і mapper, який відповідає за читання/запис між об'єктом і БД.
+
+Класичний приклад — `Doctrine ORM`. `User` — звичайний PHP-клас без жодного методу для роботи з БД, без успадкування від базового класу. `EntityManager` — окремий компонент, який знає як зберегти User у таблицю. `UserRepository` — знає як виконати запити.
+
+**Переваги Data Mapper:**
+- Повна незалежність доменної моделі від БД. `User` — це pure PHP object, його можна тестувати без жодного мока бази даних.
+- Чіткий поділ відповідальностей: домен окремо, персистентність окремо.
+- Доменна модель може мати структуру, яка не збігається зі схемою БД (наприклад, `Address` як Value Object — один об'єкт, але поля розподілені по таблиці).
+- Ідеально для DDD: агрегати, Value Objects, складні ієрархії не прив'язані до таблиць.
+
+**Недоліки Data Mapper:**
+- Значно більший boilerplate: потрібно описати маппінг (анотації, XML, PHP-атрибути), налаштувати EntityManager, писати Repository.
+- Крива навчання вища. Doctrine — потужний, але складний інструмент.
+- Надлишковий для простих CRUD-задач: заради збереження одного поля доводиться пройти через EntityManager, UnitOfWork, flush.
+
+---
+
+**Коли що вибирати:**
+
+Active Record підходить, коли застосунок переважно CRUD: адмінпанель, REST API над таблицями, прості веб-сайти. Логіка мінімальна, швидкість розробки важливіша за архітектурну чистоту.
+
+Data Mapper підходить, коли є складна бізнес-логіка, агрегати з кількох таблиць, потреба у юніт-тестах без БД, або проєкт будується за DDD. Doctrine — де-факто стандарт у Symfony для таких задач.
+
+Важливо: можна використовувати Eloquent і при цьому виносити логіку в Service/Action-класи, а моделі залишати тонкими. Це "Active Record з дисципліною" — прагматичний компроміс для більшості Laravel-проєктів.
+
+#### Міні-шпаргалка
+
+- **Active Record**: об'єкт = рядок таблиці; знає як себе зберегти (`save/find/delete`); Eloquent, Yii AR
+- **Data Mapper**: об'єкт — pure PHP; окремий mapper/EntityManager знає про БД; Doctrine
+- Active Record: швидко, просто, CRUD, але порушує SRP, важко тестувати
+- Data Mapper: clean domain, легко тестувати, але більше boilerplate
+- Вибір: AR → простий CRUD/стартап; Data Mapper → складний домен, DDD, юніт-тести
+- Компроміс: тонкі Eloquent-моделі + Service Layer = прийнятний AR у великих проєктах
 
 </details>
 
